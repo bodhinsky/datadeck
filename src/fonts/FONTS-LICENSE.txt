@@ -1,0 +1,5 @@
+Bundled fonts, all under the SIL Open Font License 1.1:
+- JetBrains Mono (JetBrains)
+- Doto (Oriol Esteve)
+- Silkscreen (Jason Kottke)
+Source: Fontsource packages (@fontsource/jetbrains-mono, @fontsource/doto, @fontsource/silkscreen).

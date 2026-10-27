@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en" data-theme="retro">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>SyncDeck</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <!-- ═══ Top deck: profile, transport, LCD ═══ -->
+  <header class="topbar">
+    <div class="np">
+      <div class="cover" aria-hidden="true">
+        <svg viewBox="0 0 40 40" width="40" height="40"><rect x="3" y="9" width="34" height="22" rx="2" class="c-body"/><circle cx="13" cy="20" r="5" class="c-reel"/><circle cx="27" cy="20" r="5" class="c-reel"/><circle cx="13" cy="20" r="1.6" class="c-hub"/><circle cx="27" cy="20" r="1.6" class="c-hub"/><rect x="10" y="27" width="20" height="4" class="c-win"/></svg>
+      </div>
+      <div class="np-text">
+        <div class="np-title" id="npTitle">No profile</div>
+        <div class="np-src" id="npSrc">—</div>
+        <div class="np-dst" id="npDst">—</div>
+      </div>
+    </div>
+    <div class="transport">
+      <button class="tbtn" id="btnPreview" title="Dry run: show what would change (⌘P)"><span class="ico">◇</span><span class="lbl">PREVIEW</span></button>
+      <button class="tbtn play" id="btnSync" title="Run sync (⌘R)"><svg viewBox="0 0 12 12" width="14" height="14"><path d="M3 1.5 L10.5 6 L3 10.5 Z"/></svg></button>
+      <button class="tbtn" id="btnStop" title="Stop (⌘.)" disabled><svg viewBox="0 0 12 12" width="12" height="12"><rect x="2" y="2" width="8" height="8"/></svg></button>
+    </div>
+    <div class="lcd" id="lcd">
+      <div class="lcd-row top">
+        <span class="lcd-state" id="lcdState">▪ IDLE</span>
+        <span class="lcd-dim" id="lcdAttempt">TRY -/-</span>
+        <span class="lcd-dim lcd-file" id="lcdFile"></span>
+        <span class="lcd-flags" id="lcdFlags"></span>
+      </div>
+      <div class="lcd-row main">
+        <span class="lcd-time red" id="lcdElapsed">0:00</span>
+        <canvas id="wave" height="34"></canvas>
+        <span class="lcd-time" id="lcdPct">--%</span>
+      </div>
+    </div>
+    <div class="meter">
+      <div class="meter-row"><span class="mlabel">SPD</span><span class="mval" id="mSpeed">-</span></div>
+      <div class="meter-row"><span class="mlabel">ETA</span><span class="mval" id="mEta">-</span></div>
+      <div class="meter-row"><span class="mlabel">XFR</span><span class="mval" id="mXfr">-</span></div>
+    </div>
+  </header>
+
+  <!-- ═══ Sidebar ═══ -->
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-dot"></span><span class="brand-name">SYNCDECK</span></div>
+
+    <div class="sect">
+      <div class="sect-h"><span class="caret">▼</span>PROFILES<span class="sect-line"></span><button class="mini" id="btnNewProfile" title="New profile">+</button></div>
+      <nav id="profileList" class="nav"></nav>
+    </div>
+
+    <div class="sect">
+      <div class="sect-h"><span class="caret">▼</span>DECK</div>
+      <nav class="nav">
+        <a class="nav-i" data-view="setup"><span class="ni-ico i-setup"></span>Setup</a>
+        <a class="nav-i" data-view="transfers"><span class="ni-ico i-transfers"></span>Transfers<span class="badge" id="badgeTransfers"></span></a>
+        <a class="nav-i" data-view="log"><span class="ni-ico i-log"></span>Live log</a>
+      </nav>
+    </div>
+
+    <div class="sect">
+      <div class="sect-h"><span class="caret">▼</span>MANAGE</div>
+      <nav class="nav">
+        <a class="nav-i" data-view="history"><span class="ni-ico i-history"></span>History</a>
+        <a class="nav-i" data-view="settings"><span class="ni-ico i-settings"></span>Settings</a>
+      </nav>
+    </div>
+
+    <div class="side-foot" id="sideFoot">rsync: detecting…</div>
+  </aside>
+
+  <!-- ═══ Main ═══ -->
+  <main class="main" id="main">
+
+    <!-- SETUP -->
+    <section class="view" id="view-setup">
+      <div class="head-panel">
+        <div class="hp-title">
+          <input class="title-input" id="pName" spellcheck="false" maxlength="60">
+          <div class="hp-sub">SYNC PROFILE <span id="saveState" class="save-state"></span></div>
+        </div>
+        <div class="chips" id="routeChips">
+          <span class="chip" id="chipRoute">▪ LOCAL</span>
+          <span class="chip" id="chipVerify">▪ VERIFY</span>
+          <span class="chip" id="chipDelete">▪ MIRROR</span>
+          <span class="chip" id="chipRetry">▪ RETRY 8</span>
+        </div>
+        <div class="statbox" id="setupStats">
+          <div class="sb-h"><span class="sb-ind">▪</span> LAST RUN <span class="sb-dim" id="lastRunWhen">never</span></div>
+          <div class="sb-grid">
+            <div><div class="sb-k">FILES</div><div class="sb-v" id="lrFiles">0000</div></div>
+            <div><div class="sb-k">SIZE</div><div class="sb-v" id="lrSize">0B</div></div>
+            <div><div class="sb-k">STATUS</div><div class="sb-v" id="lrStatus">----</div></div>
+          </div>
+        </div>
+        <div class="hp-right">
+          <div class="seg" id="themeSeg"><button data-theme-set="classic">▪CLASSIC</button><button data-theme-set="retro">▪RETRO</button></div>
+          <div class="hp-actions">
+            <button class="btn" id="btnDup" title="Duplicate profile">⧉ DUPLICATE</button>
+            <button class="btn danger-text" id="btnDel" title="Delete profile">✕ DELETE</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="panel">
+          <div class="panel-h">ROUTE</div>
+          <label class="fld"><span class="fld-k">SOURCE</span>
+            <div class="fld-row"><input id="pSource" spellcheck="false" placeholder="/Users/you/Photos   or   user@host:/path"><button class="btn" data-pick="source">BROWSE…</button></div>
+          </label>
+          <label class="fld"><span class="fld-k">DESTINATION</span>
+            <div class="fld-row"><input id="pDest" spellcheck="false" placeholder="/Volumes/Backup/Photos"><button class="btn" data-pick="dest">BROWSE…</button></div>
+          </label>
+          <div class="toggle-line">
+            <button class="sw" id="pContents" role="switch"></button>
+            <div><div class="tl-k">Copy the folder's contents</div><div class="tl-hint" id="contentsHint"></div></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h">INTEGRITY &amp; SAFETY</div>
+          <div class="toggle-line">
+            <button class="sw" id="sVerify" role="switch"></button>
+            <div><div class="tl-k">Verify after sync</div><div class="tl-hint">Re-reads both sides and compares checksums of every file after the copy. Recommended.</div></div>
+          </div>
+          <div class="toggle-line">
+            <button class="sw" id="sBackup" role="switch"></button>
+            <div class="grow"><div class="tl-k">Keep replaced &amp; deleted files</div><div class="tl-hint">Instead of overwriting, move old versions aside.</div>
+              <input id="sBackupDir" class="sm-input" spellcheck="false" placeholder="backup folder, e.g. .syncdeck-old (relative to destination)"></div>
+          </div>
+          <div class="kv-row">
+            <label class="fld sm"><span class="fld-k">MAX DELETES</span><input id="sMaxDelete" type="number" min="0" step="1"></label>
+            <div class="tl-hint">Stops deleting after this many files in one run (0 = no limit). Guards against syncing an empty or wrong source.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h">FLAGS <span class="panel-hint" id="flagHint">Hover a flag for details.</span></div>
+        <div class="flags" id="flagGrid"></div>
+      </div>
+
+      <div class="grid2">
+        <div class="panel">
+          <div class="panel-h">NETWORK &amp; RESUME</div>
+          <div class="kv-grid">
+            <label class="fld sm"><span class="fld-k">AUTO-RETRIES</span><input id="nRetries" type="number" min="0" max="100"></label>
+            <label class="fld sm"><span class="fld-k">STALL TIMEOUT (S)</span><input id="nTimeout" type="number" min="0" max="3600"></label>
+            <label class="fld sm"><span class="fld-k">BW LIMIT (KB/S)</span><input id="nBw" spellcheck="false" placeholder="none"></label>
+            <label class="fld sm"><span class="fld-k">SSH PORT</span><input id="nPort" spellcheck="false" placeholder="22"></label>
+          </div>
+          <label class="fld sm"><span class="fld-k">SSH KEY (OPTIONAL)</span><input id="nKey" spellcheck="false" placeholder="~/.ssh/id_ed25519"></label>
+          <div class="tl-hint">If the connection drops or stalls, SyncDeck waits (5s, 10s, 20s … up to 5 min) and resumes. Partly copied files are kept in <code>.rsync-partial</code> so they continue where they stopped. Remote hosts use SSH with keys only and strict host-key checking.</div>
+        </div>
+        <div class="panel">
+          <div class="panel-h">EXCLUDES <span class="panel-hint">one pattern per line</span></div>
+          <textarea id="pExcludes" rows="5" spellcheck="false"></textarea>
+          <label class="fld sm"><span class="fld-k">EXTRA RSYNC OPTIONS</span><input id="pExtra" spellcheck="false" placeholder="--modify-window=2"></label>
+        </div>
+      </div>
+
+      <div class="checks" id="checks"></div>
+      <div class="cmdbar"><span class="prompt">$</span><code id="cmdPreview"></code><button class="btn" id="btnCopyCmd">COPY</button></div>
+    </section>
+
+    <!-- TRANSFERS -->
+    <section class="view" id="view-transfers">
+      <div class="head-panel">
+        <div class="hp-title">
+          <div class="big-title">TRANSFERS</div>
+          <div class="hp-sub" id="tMode">NO RUN YET</div>
+        </div>
+        <div class="chips filter" id="tFilters">
+          <button class="chip on" data-f="all">▪ ALL <b id="cAll">0000</b></button>
+          <button class="chip" data-f="new">▪ NEW <b id="cNew">0000</b></button>
+          <button class="chip" data-f="update">▪ CHANGED <b id="cUpd">0000</b></button>
+          <button class="chip" data-f="delete">▪ DELETE <b id="cDel">0000</b></button>
+          <button class="chip" data-f="verify">▪ MISMATCH <b id="cMis">0000</b></button>
+          <button class="chip" data-f="meta">▪ OTHER <b id="cOth">0000</b></button>
+        </div>
+        <div class="statbox">
+          <div class="sb-h"><span class="sb-ind">▪</span> <span id="tPhase">PHASE</span> <span class="sb-dim" id="tPhaseVal">-</span></div>
+          <div class="sb-grid four">
+            <div><div class="sb-k">ITEMS</div><div class="sb-v" id="tItems">0000</div></div>
+            <div><div class="sb-k">TO COPY</div><div class="sb-v" id="tBytes">0B</div></div>
+            <div><div class="sb-k">RETRIES</div><div class="sb-v" id="tRetries">00</div></div>
+            <div><div class="sb-k">TIME</div><div class="sb-v time" id="tTime">0:00</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="banner" id="tBanner" hidden></div>
+      <div class="tbar"><input class="search" id="tSearch" placeholder="Filter paths…" spellcheck="false"><span class="hint grow" id="tHint">Itemized by rsync: every file that is created, changed or deleted is listed here.</span><button class="btn" id="btnRevealDest">OPEN DESTINATION</button></div>
+      <div class="table" id="tTable">
+        <div class="thead"><span class="c-n">#</span><span class="c-a">ACTION</span><span class="c-p">PATH</span><span class="c-s">SIZE</span><span class="c-c">CODE</span></div>
+        <div class="tbody" id="tBody"><div class="spacer" id="tSpacer"></div></div>
+        <div class="empty" id="tEmpty"><div>Run a <b>PREVIEW</b> to see exactly what will change before anything is touched.</div></div>
+      </div>
+    </section>
+
+    <!-- LOG -->
+    <section class="view" id="view-log">
+      <div class="head-panel slim">
+        <div class="hp-title"><div class="big-title">LIVE LOG</div><div class="hp-sub">RAW RSYNC OUTPUT</div></div>
+        <div class="hp-right inline">
+          <div class="seg" id="logSeg"><button data-log="all" class="on">▪ALL</button><button data-log="stderr">▪ERRORS</button></div>
+          <button class="btn" id="btnClearLog">CLEAR</button>
+        </div>
+      </div>
+      <pre class="console" id="console"></pre>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="view" id="view-history">
+      <div class="head-panel slim">
+        <div class="hp-title"><div class="big-title">HISTORY</div><div class="hp-sub" id="hSub">0 RUNS</div></div>
+        <div class="hp-right inline"><button class="btn" id="btnClearHistory">CLEAR HISTORY</button></div>
+      </div>
+      <div class="table hist">
+        <div class="thead"><span>#</span><span>WHEN</span><span>PROFILE</span><span>MODE</span><span>ITEMS</span><span>SIZE</span><span>TIME</span><span>TRIES</span><span>VERIFY</span><span>STATUS</span></div>
+        <div class="tbody plain" id="hBody"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings">
+      <div class="head-panel slim">
+        <div class="hp-title"><div class="big-title">SETTINGS</div><div class="hp-sub">ENGINE &amp; DISPLAY</div></div>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="panel-h">RSYNC ENGINE</div>
+          <label class="fld"><span class="fld-k">RSYNC BINARY (EMPTY = AUTO)</span>
+            <div class="fld-row"><input id="setRsync" spellcheck="false" placeholder="/opt/homebrew/bin/rsync"><button class="btn" id="btnDetect">DETECT</button></div>
+          </label>
+          <div class="engine" id="engineInfo"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-h">DISPLAY &amp; SYSTEM</div>
+          <div class="toggle-line"><button class="sw" id="setNotify" role="switch"></button><div><div class="tl-k">Notify when a sync finishes</div><div class="tl-hint">Only while the window is in the background.</div></div></div>
+          <div class="toggle-line"><button class="sw" id="setSleep" role="switch"></button><div><div class="tl-k">Keep the Mac awake while syncing</div><div class="tl-hint">Prevents idle sleep from cutting a long transfer.</div></div></div>
+          <div class="toggle-line"><button class="sw" id="setRetro" role="switch"></button><div><div class="tl-k">Retro display font</div><div class="tl-hint">Dot-matrix headings and counters.</div></div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Confirm dialog -->
+<div class="modal-back" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-h" id="mTitle">CONFIRM</div>
+    <div class="modal-b" id="mBody"></div>
+    <label class="modal-ack" id="mAckRow" hidden><input type="checkbox" id="mAck"> <span id="mAckText"></span></label>
+    <div class="modal-f"><button class="btn" id="mCancel">CANCEL</button><button class="btn primary" id="mOk">RUN</button></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
