@@ -7,7 +7,7 @@ const path = require('path');
 const { openDb, tx } = require('./db');
 const { scanSource } = require('./scanner');
 const { overview, ISSUE_INFO } = require('./analysis');
-const { queryEntries, groupBy, buildWhere } = require('./query');
+const { queryEntries, groupBy, buildWhere, FI_JOIN } = require('./query');
 const { findDuplicates, dupeGroups } = require('./dupes');
 const { createPlan, planOps, getPlan } = require('./planner');
 const { Executor, undoPlan } = require('./executor');
@@ -15,6 +15,7 @@ const { TOKENS, PRESETS, checkTemplate, renderTarget } = require('./template');
 const { TARGETS } = require('./compat');
 const { CATEGORIES } = require('./categories');
 const ws = require('./changes');
+const { inspectSource, fileInfo } = require('./fileinfo');
 
 const str = (v, name, max = 4096) => {
   if (typeof v !== 'string' || !v || v.length > max || /\0/.test(v)) throw new Error(`Invalid ${name}`);
@@ -40,8 +41,10 @@ function csvCell(v) {
 }
 
 class Engine {
-  constructor(dbFile, { emit = () => {} } = {}) {
+  constructor(dbFile, { emit = () => {}, inspect = true, spotlight } = {}) {
     this.db = openDb(dbFile);
+    this.inspect = inspect; // read file contents after a scan
+    this.spotlight = spotlight; // undefined = on macOS only
     this.dbFile = dbFile;
     this.emit = emit;
     this.jobs = new Map();
@@ -120,8 +123,36 @@ class Engine {
     return this.startJob('scan', `Scanning ${src.label}`, async (j) => {
       const r = await scanSource(this.db, id, { ...j, oneFileSystem: !!oneFileSystem });
       ws.evaluate(this.db, id); // the planned state follows the new catalog
+      // Then look inside the files; the catalog is already usable meanwhile.
+      if (!j.signal.aborted && this.inspect !== false) r.inspect = await inspectSource(this.db, id, { signal: j.signal, onProgress: j.onProgress, spotlight: this.spotlight });
+      if (r.inspect && r.inspect.done) ws.evaluate(this.db, id); // layouts may use {taken_yyyy}, {camera}, …
       return r;
     }, { sourceId: id });
+  }
+
+  inspectStart({ sourceId, force = false }) {
+    const id = int(sourceId, 'sourceId');
+    const src = this.db.prepare('SELECT label FROM sources WHERE id = ?').get(id);
+    if (!src) throw new Error('Unknown source');
+    return this.startJob('inspect', `Reading file details in ${src.label}`, async (j) => {
+      const r = await inspectSource(this.db, id, { ...j, force: !!force, spotlight: this.spotlight });
+      ws.evaluate(this.db, id);
+      return r;
+    }, { sourceId: id });
+  }
+
+  // Everything known about one entry: catalog row, issues, content details,
+  // planned state and its duplicates.
+  entryInfo({ entryId }) {
+    const id = int(entryId, 'entryId');
+    const e = this.db.prepare(`SELECT e.*, s.path AS root, COALESCE(v.vpath, e.rel_path) AS vpath, COALESCE(v.flags, 0) AS vflags, c.label AS change_label
+      FROM entries e JOIN sources s ON s.id = e.source_id LEFT JOIN vstate v ON v.entry_id = e.id LEFT JOIN changes c ON c.id = v.change_id WHERE e.id = ?`).get(id);
+    if (!e) throw new Error('Unknown entry');
+    e.issues = this.db.prepare('SELECT code, detail FROM issues WHERE entry_id = ?').all(id);
+    e.info = e.kind === 'file' ? fileInfo(this.db, e.source_id, e.rel_path) : null;
+    e.copies = e.hash ? this.db.prepare(`SELECT id, rel_path, mtime FROM entries WHERE source_id = ? AND hash = ? AND size = ? AND id <> ? ORDER BY rel_path LIMIT 50`).all(e.source_id, e.hash, e.size, id) : [];
+    e.abs = path.join(e.root, e.rel_path);
+    return e;
   }
 
   overview({ sourceId }) { return overview(this.db, int(sourceId, 'sourceId')); }
@@ -287,11 +318,15 @@ class Engine {
       } else {
         const f = { ...(filter || {}), sourceId: int(filter && filter.sourceId, 'sourceId') };
         const { where, params } = buildWhere(f);
-        line(['path', 'name', 'kind', 'category', 'extension', 'bytes', 'modified', 'depth', 'sha256', 'issues', 'error']);
-        const it = this.db.prepare(`SELECT e.*, (SELECT GROUP_CONCAT(code) FROM issues i WHERE i.entry_id = e.id) AS issue_codes
-          FROM entries e WHERE ${where} ORDER BY e.rel_path`).iterate(...params);
+        line(['path', 'name', 'kind', 'category', 'extension', 'bytes', 'modified', 'depth', 'sha256', 'issues', 'error',
+          'real_type', 'extension_mismatch', 'taken', 'width', 'height', 'duration_s', 'camera', 'gps_lat', 'gps_lon', 'title', 'artist', 'album', 'author', 'pages', 'last_opened', 'finder_tags', 'where_from']);
+        const iso = (t) => (t ? new Date(t).toISOString() : '');
+        const it = this.db.prepare(`SELECT e.*, (SELECT GROUP_CONCAT(code) FROM issues i WHERE i.entry_id = e.id) AS issue_codes,
+          f.type AS ftype, f.mismatch, f.taken, f.width, f.height, f.duration, f.camera, f.gps_lat, f.gps_lon, f.title, f.artist, f.album, f.author, f.pages, f.last_used, f.tags, f.where_from
+          FROM entries e ${FI_JOIN} WHERE ${where} ORDER BY e.rel_path`).iterate(...params);
         for (const r of it) {
-          line([r.rel_path, r.name, r.kind, r.category, r.ext, r.kind === 'dir' ? r.tree_bytes : r.size, r.mtime ? new Date(r.mtime).toISOString() : '', r.depth, r.hash, r.issue_codes, r.error]);
+          line([r.rel_path, r.name, r.kind, r.category, r.ext, r.kind === 'dir' ? r.tree_bytes : r.size, iso(r.mtime), r.depth, r.hash, r.issue_codes, r.error,
+            r.ftype, r.mismatch ? 'yes' : '', iso(r.taken), r.width, r.height, r.duration, r.camera, r.gps_lat, r.gps_lon, r.title, r.artist, r.album, r.author, r.pages, iso(r.last_used), r.tags, r.where_from]);
           n++;
         }
       }
@@ -312,6 +347,7 @@ const API = {
   'plan.execute': 'planExecute', 'plan.undo': 'planUndo',
   'ws.summary': 'wsSummary', 'ws.list': 'wsList', 'ws.stage': 'wsStage', 'ws.unstage': 'wsUnstage', 'ws.discard': 'wsDiscardStaged', 'ws.commit': 'wsCommit',
   'ws.review': 'wsReview', 'ws.revert': 'wsRevert', 'ws.target': 'wsTarget', 'ws.diff': 'wsDiff', 'ws.folders': 'wsFolders', 'ws.check': 'wsCheck', 'ws.verify': 'wsVerify', 'ws.export': 'wsExport',
+  'inspect.start': 'inspectStart', 'entry.info': 'entryInfo',
   'job.cancel': 'jobCancel', 'jobs.list': 'jobsList', 'export.csv': 'exportCsv',
 };
 

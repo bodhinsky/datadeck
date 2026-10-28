@@ -131,7 +131,7 @@
   };
 
   DD.kpis = (items) => DD.h('div', { class: 'kpis' }, items.filter(Boolean).map((k) =>
-    DD.h('div', { class: `kpi ${k.tone || ''}`, title: k.title || '' },
+    DD.h('div', { class: `kpi ${k.tone || ''}${k.click ? ' click' : ''}`, title: k.title || '', onclick: k.click || null },
       DD.h('div', { class: 'k', text: k.k }),
       DD.h('div', { class: 'v' }, k.v, k.unit ? DD.h('small', { text: k.unit }) : null),
       k.d ? DD.h('div', { class: 'd', text: k.d }) : null)));

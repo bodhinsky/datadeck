@@ -1,7 +1,8 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker, Notification, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker, Notification, Menu, nativeImage } = require('electron');
 const path = require('path');
 const { Store } = require('./src/store');
+const { makePreview } = require('./src/preview');
 const { EngineClient } = require('./src/engine/client');
 const { SyncRun, detectRsync } = require('./src/core/runner');
 const { buildArgs, commandPreview, newProfile, normalizeProfile, FLAGS, isRemote, expandHome } = require('./src/core/args');
@@ -108,6 +109,13 @@ function registerIpc() {
   ipcMain.handle('engine:call', async (_e, method, params) => {
     if (typeof method !== 'string') throw new Error('Invalid call');
     return engine.call(method, params);
+  });
+  // Previews take an entry id; the file path is looked up in the catalog.
+  ipcMain.handle('preview:get', async (_e, entryId, size) => {
+    const id = Number(entryId);
+    if (!Number.isInteger(id) || id < 0) throw new Error('Invalid entry');
+    const entry = await engine.call('entry.info', { entryId: id });
+    return makePreview(entry, { nativeImage, size: Math.max(64, Math.min(1024, Number(size) || 360)) });
   });
   ipcMain.handle('dialog:save', async (_e, { title, defaultPath } = {}) => {
     const r = await dialog.showSaveDialog(win, { title: title || 'Export', defaultPath: defaultPath || 'export.csv', filters: [{ name: 'CSV', extensions: ['csv'] }] });

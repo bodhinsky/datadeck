@@ -16,12 +16,21 @@
   const inputs = {};
 
   const GROUP_DIMS = [['', 'None'], ['category', 'Type'], ['ext', 'Extension'], ['year', 'Year'], ['month', 'Month'], ['top', 'Top folder'], ['parent', 'Folder']];
+  // Content dimensions live in a select next to the segment buttons.
+  const MORE_DIMS = [['ftype', 'Real type'], ['takenYear', 'Year taken'], ['takenMonth', 'Month taken'], ['camera', 'Camera'], ['resolution', 'Resolution'],
+    ['length', 'Length'], ['artist', 'Artist'], ['album', 'Album'], ['author', 'Author'], ['usedYear', 'Last opened'], ['mismatch', 'Extension check']];
+  const DIM_LABEL = Object.fromEntries([...GROUP_DIMS, ...MORE_DIMS]);
+  const TAKEN_OPTS = [['', 'Any'], ['yes', 'Has date taken'], ['no', 'Photo/video without date']];
+  const GPS_OPTS = [['', 'Any'], ['yes', 'Has location'], ['no', 'Photo/video without location']];
+  const UNUSED_OPTS = [['', 'Any'], ['1', 'Not opened for 1 year'], ['3', 'Not opened for 3 years'], ['5', 'Not opened for 5 years']];
   const KIND_OPTS = [['', 'Everything'], ['file', 'Files'], ['dir', 'Folders'], ['symlink', 'Links']];
   const PLANNED_OPTS = [['', 'Any'], ['changed', 'Changed'], ['excluded', 'Excluded'], ['kept', 'Kept'], ['problems', 'Problems']];
   // Selection: explicit rows, or "everything matching the filter".
   const sel = { ids: new Map(), all: false };
   let selBar;
   let matching = 0;
+  let panel;
+  let moreBox;
 
   function dateVal(ms) { return ms ? new Date(ms).toISOString().slice(0, 10) : ''; }
 
@@ -43,6 +52,14 @@
     if (f.anyIssue) parts.push('with issues');
     if (f.dupes) parts.push('duplicates');
     if (f.planned) parts.push(`planned: ${f.planned}`);
+    if (f.ftypes && f.ftypes.length) parts.push(`content ${f.ftypes.join(', ')}`);
+    if (f.mismatch) parts.push('wrong extension');
+    if (f.taken) parts.push(f.taken === 'yes' ? 'with date taken' : 'without date taken');
+    if (f.takenFrom || f.takenTo) parts.push(`taken ${f.takenFrom ? DD.fmtDate(f.takenFrom) : '…'} – ${f.takenTo ? DD.fmtDate(f.takenTo) : '…'}`);
+    if (f.gps) parts.push(f.gps === 'yes' ? 'with location' : 'without location');
+    for (const k of ['camera', 'artist', 'album', 'author', 'tag']) if (f[k]) parts.push(`${k} “${f[k]}”`);
+    if (f.unusedSince) parts.push(`not opened since ${DD.fmtDate(f.unusedSince)}`);
+    if (f.downloaded) parts.push('downloaded');
     return parts.length ? parts.join(' · ') : 'All entries';
   }
   DD.describeFilter = describe;
@@ -53,7 +70,9 @@
       build();
       DD.bus.addEventListener('job-done', (e) => { if (S.page === 'explorer' && e.detail.sourceId === S.sourceId) refresh(); });
       DD.bus.addEventListener('ws', () => { if (S.page === 'explorer') table.reload({ keepScroll: true }); });
-      DD.bus.addEventListener('source', () => clearSel());
+      DD.bus.addEventListener('source', () => { clearSel(); panel.close(); });
+      DD.bus.addEventListener('ws', () => { if (panel.entry) panel.show(panel.entry.id); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.page === 'explorer' && !panel.el.hidden && !document.querySelector('.modal-back')) panel.close(); });
     },
     show(params = {}) {
       if (params.filter) { S.filter = { ...params.filter }; fillInputs(); }
@@ -87,19 +106,40 @@
       h('label', { class: 'chk' }, inputs.anyIssue = h('input', { type: 'checkbox', onchange: readInputs }), 'Issues only'),
       h('label', { class: 'chk' }, inputs.dupes = h('input', { type: 'checkbox', onchange: readInputs }), 'Duplicates only'),
       field('Planned', inputs.planned = h('select', { class: 'input', onchange: readInputs }, PLANNED_OPTS.map(([v, l]) => h('option', { value: v, text: l })))),
+      inputs.moreBtn = h('button', { class: 'btn ghost', text: 'Content filters ▾', onclick: () => { moreBox.hidden = !moreBox.hidden; inputs.moreBtn.textContent = moreBox.hidden ? 'Content filters ▾' : 'Content filters ▴'; } }),
       h('button', { class: 'btn ghost', text: 'Reset', onclick: () => { S.filter = {}; fillInputs(); refresh(); } }));
+    const choice = (key, opts) => (inputs[key] = h('select', { class: 'input', onchange: readInputs }, opts.map(([v, l]) => h('option', { value: v, text: l }))));
+    moreBox = h('div', { class: 'filters more', hidden: true },
+      field('Real type', mk('ftypes', { placeholder: 'heic, jpeg', oninput: onChange }), 'w-ext'),
+      field('Date taken', choice('taken', TAKEN_OPTS)),
+      field('Taken from', mk('takenFrom', { type: 'date', onchange: readInputs }), 'w-date'),
+      field('to', mk('takenTo', { type: 'date', onchange: readInputs }), 'w-date'),
+      field('Camera', mk('camera', { placeholder: 'iPhone', oninput: onChange }), 'w-ext'),
+      field('Location', choice('gps', GPS_OPTS)),
+      field('Artist', mk('artist', { placeholder: '', oninput: onChange }), 'w-ext'),
+      field('Finder tag', mk('tag', { placeholder: 'Work', oninput: onChange }), 'w-ext'),
+      field('Last opened', choice('unused', UNUSED_OPTS)),
+      h('label', { class: 'chk' }, inputs.mismatch = h('input', { type: 'checkbox', onchange: readInputs }), 'Wrong extension'),
+      h('label', { class: 'chk' }, inputs.downloaded = h('input', { type: 'checkbox', onchange: readInputs }), 'Downloaded'));
     inputs.cats = h('div', { class: 'catchips' });
 
     const groupSeg = h('div', { class: 'seg' }, GROUP_DIMS.map(([v, l]) => h('button', { 'data-dim': v, text: l, class: v === S.groupDim ? 'on' : '', onclick: (e) => {
       S.groupDim = v;
       groupSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.target));
+      inputs.dimMore.value = '';
       refreshGroups();
     } })));
+    inputs.dimMore = h('select', { class: 'input small', title: 'Group by what is inside the files', onchange: () => {
+      if (!inputs.dimMore.value) return;
+      S.groupDim = inputs.dimMore.value;
+      groupSeg.querySelectorAll('button').forEach((b) => b.classList.remove('on'));
+      refreshGroups();
+    } }, h('option', { value: '', text: 'Content…' }), MORE_DIMS.map(([v, l]) => h('option', { value: v, text: l })));
 
     subEl = h('div', { class: 'sub', text: '' });
     const head = h('div', { class: 'page-h' },
       h('div', {}, h('h1', { text: 'Explorer' }), subEl),
-      h('div', { class: 'actions' }, h('span', { class: 'hint', text: 'Group by' }), groupSeg,
+      h('div', { class: 'actions' }, h('span', { class: 'hint', text: 'Group by' }), groupSeg, inputs.dimMore,
         h('button', { class: 'btn', text: 'Export CSV…', onclick: () => view.exportCsv() }),
         h('button', { class: 'btn', text: 'Lay out these…', title: 'Stage a new folder layout for the current filter', onclick: () => DD.go('restructure', { filter: { ...S.filter } }) })));
     selBar = h('div', { class: 'selbar' });
@@ -113,7 +153,8 @@
         { label: 'Name', sort: 'name', width: 'minmax(120px, 2fr)', render: (r) => h('span', { class: r.kind === 'dir' ? 'kind-dir' : '' }, r.kind === 'dir' ? '▸ ' : r.kind === 'symlink' ? '↪ ' : '', r.name), titleOf: (r) => r.rel_path },
         { label: 'Folder', sort: 'path', width: 'minmax(60px, 1.5fr)', cls: 'dim', render: (r) => (r.rel_path.includes('/') ? r.rel_path.slice(0, r.rel_path.lastIndexOf('/')) : '/'), titleOf: (r) => r.rel_path },
         { label: 'Planned path', sort: 'planned', width: 'minmax(80px, 1.6fr)', render: (r) => (r.vpath === r.rel_path ? (r.vflags & DD.VF.EXCLUDED ? '—' : h('span', { class: 'dim', text: 'unchanged' })) : h('span', { class: 'after', text: r.vpath })), titleOf: (r) => (r.change_label ? `${r.vpath}\n${r.change_label}` : r.vpath) },
-        { label: 'Type', sort: 'category', width: '76px', render: (r) => r.category },
+        { label: 'Type', sort: 'category', width: '82px', render: (r) => (r.mismatch ? h('span', { class: 'tag warn', text: DD.typeLabel(r.ftype), title: `Content is ${DD.typeLabel(r.ftype)}, extension says .${r.ext}` }) : r.category), titleOf: (r) => (r.ftype ? `Content: ${DD.typeLabel(r.ftype)}` : r.category) },
+        { label: 'Details', sort: 'when', width: 'minmax(80px, 1.3fr)', cls: 'dim', render: (r) => DD.contentSummary(r), titleOf: (r) => [r.title, r.camera, r.artist, r.album, r.author, r.tags ? `Tags: ${r.tags}` : null, r.last_used ? `Last opened ${DD.fmtDate(r.last_used)}` : null].filter(Boolean).join('\n') },
         { label: 'Size', sort: 'size', width: '76px', align: 'right', mono: true, render: (r) => (r.kind === 'dir' ? DD.fmtBytes(r.tree_bytes) : r.kind === 'file' ? DD.fmtBytes(r.size) : '') },
         { label: 'Modified', sort: 'mtime', width: '88px', mono: true, render: (r) => DD.fmtDate(r.mtime) },
         { label: 'State', width: '140px', render: (r) => h('span', { class: 'row', style: { gap: '4px' } }, DD.stateChips(r.vflags), flags(r)) },
@@ -123,12 +164,26 @@
         if (r.totals) { matching = r.totals.count; renderStatus(r.totals); renderSel(); }
         return { rows: r.rows, total: r.totals ? r.totals.count : table.total };
       },
-      onRowClick: (r) => details(r),
+      onRowClick: (r) => panel.show(r.id),
+      // Keyboard triage: arrows walk, Space selects, E excludes or includes.
+      onKey: (ev, r) => {
+        if (ev.key === ' ') { toggle(r, !sel.ids.has(r.id)); return true; }
+        if (ev.key === 'e' || ev.key === 'E') { DD.stage(r.vflags & DD.VF.EXCLUDED ? 'include' : 'exclude', { ids: [r.id] }); return true; }
+        if (ev.key === 'Enter' && r.kind === 'dir') { S.filter = { under: r.rel_path }; fillInputs(); refresh(); return true; }
+        return false;
+      },
     });
+    panel = new DD.DetailsPanel({
+      onClose: () => { $('exSplit').classList.remove('withpanel'); table.active = -1; table.render(); },
+      onFilterFolder: (rel) => { S.filter = { under: rel }; fillInputs(); refresh(); },
+      onOpen: (id) => panel.show(id),
+    });
+    const showPanel = panel.show.bind(panel);
+    panel.show = (id) => { $('exSplit').classList.add('withpanel'); return showPanel(id); };
 
     groupBox = h('div', { class: 'card groups' }, h('div', { class: 'card-h' }, h('h3', { text: 'Groups' }), h('span', { class: 'hint', text: 'click to drill in' })), h('div', { class: 'card-b' }));
     statusEl = h('div', { class: 'statusline' });
-    el.replaceChildren(head, bar, inputs.cats, h('div', { class: 'split', id: 'exSplit' }, groupBox, h('div', { style: { display: 'flex', flexDirection: 'column', minHeight: '0' } }, selBar, table.el, statusEl)));
+    el.replaceChildren(head, bar, moreBox, inputs.cats, h('div', { class: 'split', id: 'exSplit' }, groupBox, h('div', { class: 'tablecol' }, selBar, table.el, statusEl), panel.el));
     renderSel();
   }
 
@@ -178,6 +233,18 @@
     set('anyIssue', inputs.anyIssue.checked || null);
     set('dupes', inputs.dupes.checked || null);
     set('planned', inputs.planned.value || null);
+    const ft = inputs.ftypes.value.split(/[\s,]+/).map((x) => x.replace(/^\./, '').toLowerCase()).filter(Boolean);
+    set('ftypes', ft.length ? ft : null);
+    set('taken', inputs.taken.value || null);
+    set('takenFrom', inputs.takenFrom.value ? new Date(`${inputs.takenFrom.value}T00:00:00`).getTime() : null);
+    set('takenTo', inputs.takenTo.value ? new Date(`${inputs.takenTo.value}T23:59:59.999`).getTime() : null);
+    set('camera', inputs.camera.value.trim() || null);
+    set('gps', inputs.gps.value || null);
+    set('artist', inputs.artist.value.trim() || null);
+    set('tag', inputs.tag.value.trim() || null);
+    set('unusedSince', inputs.unused.value ? Date.now() - Number(inputs.unused.value) * 365.25 * 864e5 : null);
+    set('mismatch', inputs.mismatch.checked || null);
+    set('downloaded', inputs.downloaded.checked || null);
     S.filter = f;
     refresh();
   }
@@ -197,6 +264,19 @@
     inputs.anyIssue.checked = !!f.anyIssue;
     inputs.dupes.checked = !!f.dupes;
     inputs.planned.value = f.planned || '';
+    inputs.ftypes.value = (f.ftypes || []).join(', ');
+    inputs.taken.value = f.taken || '';
+    inputs.takenFrom.value = dateVal(f.takenFrom);
+    inputs.takenTo.value = dateVal(f.takenTo);
+    inputs.camera.value = f.camera || '';
+    inputs.gps.value = f.gps || '';
+    inputs.artist.value = f.artist || '';
+    inputs.tag.value = f.tag || '';
+    inputs.unused.value = f.unusedSince ? String([1, 3, 5].reduce((a, y) => (Math.abs(Date.now() - y * 365.25 * 864e5 - f.unusedSince) < Math.abs(Date.now() - a * 365.25 * 864e5 - f.unusedSince) ? y : a), 1)) : '';
+    inputs.mismatch.checked = !!f.mismatch;
+    inputs.downloaded.checked = !!f.downloaded;
+    const contentKeys = ['ftypes', 'taken', 'takenFrom', 'takenTo', 'camera', 'gps', 'artist', 'tag', 'unusedSince', 'mismatch', 'downloaded', 'album', 'author'];
+    if (contentKeys.some((k) => f[k])) { moreBox.hidden = false; inputs.moreBtn.textContent = 'Content filters ▴'; }
     for (const k of ['sizeMin', 'sizeMax']) inputs[k].classList.remove('bad');
   }
 
@@ -214,12 +294,14 @@
     groupBox.hidden = !S.groupDim;
     if (!S.groupDim) return;
     const dim = S.groupDim;
-    const rows = await DD.call('entries.group', { filter: fullFilter(), dim, limit: 300, order: dim === 'year' || dim === 'month' ? 'key' : 'bytes' });
-    if (dim === 'year' || dim === 'month') rows.reverse();
+    const byKey = ['year', 'month', 'takenYear', 'takenMonth', 'usedYear'].includes(dim);
+    const rows = await DD.call('entries.group', { filter: fullFilter(), dim, limit: 300, order: byKey ? 'key' : 'bytes' });
+    if (byKey) rows.reverse();
     const body = groupBox.querySelector('.card-b');
     body.replaceChildren(DD.statTable({
       rows: rows.map((r) => ({ ...r, key: r.key === null ? '(undated)' : String(r.key) })),
-      keyLabel: GROUP_DIMS.find((d) => d[0] === dim)[1],
+      keyLabel: DIM_LABEL[dim] || dim,
+      fmtKey: dim === 'ftype' ? (k) => (k.startsWith('(') ? k : DD.typeLabel(k)) : (k) => k,
       onClick: (r) => drill(dim, r.key),
     }));
   }
@@ -232,6 +314,12 @@
     else if (dim === 'month' && /^\d{4}-\d{2}$/.test(key)) { const [y, m] = key.split('-').map(Number); f.mtimeFrom = new Date(y, m - 1, 1).getTime(); f.mtimeTo = new Date(y, m, 1).getTime() - 1; }
     else if (dim === 'top') { if (key === '(root)') f.parent = '(root)'; else f.under = key; }
     else if (dim === 'parent') f.parent = key;
+    else if (dim === 'ftype') { if (key.startsWith('(')) return; f.ftypes = [key]; }
+    else if ((dim === 'takenYear' || dim === 'takenMonth') && key.startsWith('(')) f.taken = 'no';
+    else if (dim === 'takenYear') { f.takenFrom = new Date(Number(key), 0, 1).getTime(); f.takenTo = new Date(Number(key) + 1, 0, 1).getTime() - 1; f.taken = 'yes'; }
+    else if (dim === 'takenMonth') { const [y, m] = key.split('-').map(Number); f.takenFrom = new Date(y, m - 1, 1).getTime(); f.takenTo = new Date(y, m, 1).getTime() - 1; f.taken = 'yes'; }
+    else if (['camera', 'artist', 'album', 'author'].includes(dim)) f[dim] = key;
+    else if (dim === 'mismatch') { if (key === 'ok') return; f.mismatch = true; }
     else return;
     S.filter = f;
     fillInputs();
@@ -287,27 +375,6 @@
       h('span', {}, h('b', { text: DD.fmtNum(t.dirs || 0) }), ' folders'),
       h('span', {}, h('b', { text: DD.fmtBytes(t.bytes) }), ' in files'),
       h('span', { class: 'spacer' }),
-      h('span', { class: 'hint', text: 'Click a row for details' }));
-  }
-
-  function details(r) {
-    const src = DD.source();
-    const abs = `${src.path}/${r.rel_path}`;
-    const kv = (k, v) => h('tr', {}, h('td', { class: 'hint', text: k, style: { paddingRight: '14px', verticalAlign: 'top' } }), h('td', { class: 'mono', text: v ?? '–', style: { userSelect: 'text', wordBreak: 'break-all' } }));
-    DD.confirm({
-      title: r.name,
-      body: [h('table', {}, h('tbody', {},
-        kv('Path', abs), r.vpath !== r.rel_path || r.vflags ? kv('Planned', r.vflags & DD.VF.EXCLUDED ? 'excluded from export' : r.vpath) : null,
-        r.change_label ? kv('Decided by', r.change_label) : null, kv('Kind', r.kind), kv('Type', r.category), kv('Size', r.kind === 'dir' ? `${DD.fmtBytes(r.tree_bytes)} in ${DD.fmtNum(r.tree_files)} files` : `${DD.fmtBytes(r.size)} (${DD.fmtNum(r.size)} bytes)`),
-        kv('Modified', DD.fmtDateTime(r.mtime)), kv('Depth', String(r.depth)), r.link_target ? kv('Links to', r.link_target) : null,
-        r.nlink > 1 ? kv('Hard links', String(r.nlink)) : null, kv('SHA-256', r.hash || 'not computed'),
-        r.issues ? kv('Issues', r.issues.split(',').map((c) => (S.meta.issues[c] || {}).label || c).join(', ')) : null,
-        r.error ? kv('Error', r.error) : null))],
-      okText: 'Show in Finder',
-      altText: r.kind === 'dir' ? 'Filter to this folder' : null,
-    }).then((v) => {
-      if (v === true) deck.showItem(abs);
-      if (v === 'alt') { S.filter = { under: r.rel_path }; fillInputs(); refresh(); }
-    });
+      h('span', { class: 'hint', text: 'Click a row for details · ↑↓ walk · Space select · E exclude' }));
   }
 })();

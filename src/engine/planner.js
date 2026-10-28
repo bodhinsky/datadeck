@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { tx } = require('./db');
-const { buildWhere } = require('./query');
+const { buildWhere, FI_JOIN } = require('./query');
 const { checkTemplate, renderTarget, safeJoin, numbered } = require('./template');
 const { TARGETS, isJunk, sanitizeName } = require('./compat');
 
@@ -76,8 +76,9 @@ function createPlan(db, spec) {
     ? db.prepare(`SELECT e.id, e.rel_path, e.parent, e.name, e.ext, e.kind, e.category, e.size, e.mtime, e.hash, e.error, v.vpath
         FROM entries e LEFT JOIN vstate v ON v.entry_id = e.id
         WHERE e.source_id = ? AND e.kind = 'file' AND (COALESCE(v.flags, 0) & 4) = 0 ORDER BY COALESCE(v.vpath, e.rel_path)`).all(src.id)
-    : db.prepare(`SELECT e.id, e.rel_path, e.parent, e.name, e.ext, e.kind, e.category, e.size, e.mtime, e.hash, e.error
-    FROM entries e WHERE ${where} AND e.kind = 'file' ORDER BY e.rel_path`).all(...params);
+    : db.prepare(`SELECT e.id, e.rel_path, e.parent, e.name, e.ext, e.kind, e.category, e.size, e.mtime, e.hash, e.error,
+      f.type AS ftype, f.taken, f.created AS fcreated, f.camera, f.artist, f.album, f.width, f.height
+    FROM entries e ${FI_JOIN} WHERE ${where} AND e.kind = 'file' ORDER BY e.rel_path`).all(...params);
 
   const ops = [];
   const taken = new Map(); // normalized target -> index in ops

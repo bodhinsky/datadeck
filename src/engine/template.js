@@ -17,6 +17,10 @@ const TOKENS = {
   yyyy: 'Year modified', mm: 'Month modified (01–12)', dd: 'Day modified (01–31)',
   date: 'Date modified, YYYY-MM-DD', sizeclass: 'tiny / small / medium / large / huge',
   source: 'Source name', hash8: 'First 8 characters of the SHA-256 (if computed)',
+  taken_yyyy: 'Year taken (photos, videos; else created, else modified)', taken_mm: 'Month taken (01–12)', taken_dd: 'Day taken (01–31)',
+  taken_date: 'Date taken, YYYY-MM-DD', camera: 'Camera model ("unknown camera" if none)',
+  artist: 'Artist ("unknown artist" if none)', album: 'Album ("unknown album" if none)',
+  realext: 'Extension that matches the content (fixes wrong extensions)', shape: 'landscape / portrait / square (images, videos)',
 };
 
 const PRESETS = [
@@ -26,7 +30,16 @@ const PRESETS = [
   { id: 'type-date', label: 'By type, then year', template: '{category}/{yyyy}/{name}' },
   { id: 'flatten', label: 'Flatten', template: '{name}' },
   { id: 'by-top', label: 'By top folder and type', template: '{top}/{category}/{name}' },
+  { id: 'photos', label: 'Photos by date taken', template: '{taken_yyyy}/{taken_date}/{name}' },
+  { id: 'camera', label: 'By camera, then year', template: '{camera}/{taken_yyyy}/{name}' },
+  { id: 'music', label: 'Music by artist and album', template: '{artist}/{album}/{name}' },
 ];
+
+// The preferred extension for each detected type, for {realext}.
+const REAL_EXT = { jpeg: 'jpg', png: 'png', gif: 'gif', webp: 'webp', heic: 'heic', avif: 'avif', tiff: 'tif', bmp: 'bmp', psd: 'psd', svg: 'svg',
+  mp4: 'mp4', mov: 'mov', m4a: 'm4a', mkv: 'mkv', webm: 'webm', avi: 'avi', mp3: 'mp3', flac: 'flac', wav: 'wav', aiff: 'aiff', ogg: 'ogg',
+  pdf: 'pdf', rtf: 'rtf', docx: 'docx', xlsx: 'xlsx', pptx: 'pptx', odt: 'odt', ods: 'ods', odp: 'odp', epub: 'epub', zip: 'zip', gzip: 'gz',
+  '7z': '7z', rar: 'rar', tar: 'tar', sqlite: 'sqlite', html: 'html', xml: 'xml' };
 
 function sizeClass(n) {
   if (n < 10 * 1024) return 'tiny';
@@ -42,7 +55,7 @@ function checkTemplate(tpl) {
   else {
     if (tpl.startsWith('/') || /^[a-zA-Z]:/.test(tpl)) errors.push('Template must be relative to the target folder.');
     for (const m of tpl.matchAll(/\{([^}]*)\}/g)) if (!(m[1] in TOKENS)) errors.push(`Unknown token {${m[1]}}.`);
-    if (/[{}]/.test(tpl.replace(/\{[a-z0-9]+\}/gi, ''))) errors.push('Unbalanced braces in template.');
+    if (/[{}]/.test(tpl.replace(/\{[a-z0-9_]+\}/gi, ''))) errors.push('Unbalanced braces in template.');
   }
   return errors;
 }
@@ -68,13 +81,23 @@ function renderTarget(tpl, e, ctx = {}) {
     date: d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : 'undated',
     sizeclass: sizeClass(e.size || 0), source: ctx.source || 'source', hash8: e.hash ? e.hash.slice(0, 8) : 'nohash',
   };
+  const tk = e.taken || e.fcreated || e.mtime;
+  const td = tk ? new Date(tk) : null;
+  Object.assign(vals, {
+    taken_yyyy: td ? String(td.getFullYear()) : 'undated', taken_mm: td ? pad(td.getMonth() + 1) : 'undated', taken_dd: td ? pad(td.getDate()) : 'undated',
+    taken_date: td ? `${td.getFullYear()}-${pad(td.getMonth() + 1)}-${pad(td.getDate())}` : 'undated',
+    camera: (e.camera || 'unknown camera').replace(/\//g, '-'), artist: (e.artist || 'unknown artist').replace(/\//g, '-'), album: (e.album || 'unknown album').replace(/\//g, '-'),
+    realext: REAL_EXT[e.ftype] || e.ext || '',
+    shape: !e.width || !e.height ? 'no-shape' : e.width > e.height * 1.05 ? 'landscape' : e.height > e.width * 1.05 ? 'portrait' : 'square',
+  });
+  // {stem}.{realext} is the way to fix wrong extensions; plain {name} keeps the name.
   let t = tpl.trim();
   if (!/\{(name|stem)\}/.test(t)) t = `${t.replace(/\/+$/, '')}/{name}`;
   // Expand per segment so a token value containing "/" ({path}) becomes
   // several segments, and each segment is sanitized on its own.
   const segs = [];
   for (const raw of t.split('/')) {
-    const expanded = raw.replace(/\{([a-z0-9]+)\}/gi, (_, k) => `\u0001${vals[k] ?? ''}\u0001`);
+    const expanded = raw.replace(/\{([a-z0-9_]+)\}/gi, (_, k) => `\u0001${vals[k] ?? ''}\u0001`);
     for (const piece of expanded.replace(/\u0001/g, '').split('/')) {
       if (!piece) continue;
       segs.push(sanitizeName(piece, target));
@@ -84,7 +107,7 @@ function renderTarget(tpl, e, ctx = {}) {
   // "{stem}" alone drops the extension; put it back so file types survive.
   const last = segs[segs.length - 1];
   const lastTpl = t.split('/').pop();
-  if (e.ext && /\{stem\}/.test(lastTpl) && !/\{(name|ext)\}/.test(lastTpl) && !last.toLowerCase().endsWith(`.${e.ext}`)) {
+  if (e.ext && /\{stem\}/.test(lastTpl) && !/\{(name|ext|realext)\}/.test(lastTpl) && !last.toLowerCase().endsWith(`.${e.ext}`)) {
     segs[segs.length - 1] = sanitizeName(`${last}.${e.ext}`, target);
   }
   return segs.join('/');

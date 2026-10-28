@@ -5,6 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('deck', {
   engine: (method, params) => ipcRenderer.invoke('engine:call', method, params),
   onEngineEvent: (fn) => ipcRenderer.on('engine:event', (_e, m) => fn(m.event, m.data)),
+  preview: (entryId, size) => ipcRenderer.invoke('preview:get', entryId, size),
   saveFile: (opts) => ipcRenderer.invoke('dialog:save', opts),
   init: () => ipcRenderer.invoke('app:init'),
   newProfile: () => ipcRenderer.invoke('profiles:new'),

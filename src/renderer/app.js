@@ -103,7 +103,10 @@
       $('jobTitle').textContent = job.label;
       let sub = '';
       let frac = null;
-      if (job.kind === 'scan') sub = `${DD.fmtNum(p.files || 0)} files · ${DD.fmtNum(p.dirs || 0)} folders · ${DD.fmtBytes(p.bytes || 0)}${p.current ? ` · ${p.current}` : ''}`;
+      if ((job.kind === 'scan' || job.kind === 'inspect') && (p.phase === 'inspect' || p.phase === 'spotlight')) {
+        sub = p.phase === 'spotlight' ? 'Reading Spotlight details (last opened, tags)' : `Reading file details · ${DD.fmtNum(p.done || 0)} / ${DD.fmtNum(p.total || 0)}${p.mismatched ? ` · ${p.mismatched} wrong extensions` : ''}`;
+        frac = p.phase === 'inspect' && p.total ? p.done / p.total : null;
+      } else if (job.kind === 'scan') sub = `${DD.fmtNum(p.files || 0)} files · ${DD.fmtNum(p.dirs || 0)} folders · ${DD.fmtBytes(p.bytes || 0)}${p.current ? ` · ${p.current}` : ''}`;
       else if (job.kind === 'dupes') { sub = `${p.phase === 'full' ? 'Comparing contents' : 'Pre-checking'} · ${DD.fmtBytes(p.bytesHashed || 0)} read`; frac = p.phase === 'full' && p.fullCandidates ? p.hashed / p.fullCandidates : p.candidates ? (p.quick || 0) / p.candidates * 0.3 : null; }
       else if (job.kind === 'execute') { sub = `${DD.fmtNum((p.done || 0) + (p.skipped || 0))} / ${DD.fmtNum(p.total || 0)} files · ${DD.fmtBytes(p.bytesDone || 0)} of ${DD.fmtBytes(p.bytesTotal || 0)}${p.failed ? ` · ${p.failed} failed` : ''}`; frac = p.bytesTotal ? p.bytesDone / p.bytesTotal : p.total ? (p.done + p.skipped) / p.total : null; }
       else if (job.kind === 'verify') { sub = `${DD.fmtNum(p.checked || 0)} / ${DD.fmtNum(p.total || 0)} files compared with the disk`; frac = p.total ? p.checked / p.total : null; }

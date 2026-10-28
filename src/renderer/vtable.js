@@ -7,11 +7,13 @@
   const { h } = DD;
 
   class VirtualTable {
-    constructor({ columns, fetch, onRowClick, rowClass, rowHeight = 30, pageSize = 200, emptyText = 'Nothing to show.', sort = null, dir = 'asc', round = false, onLoaded }) {
+    constructor({ columns, fetch, onRowClick, onKey, rowClass, rowHeight = 30, pageSize = 200, emptyText = 'Nothing to show.', sort = null, dir = 'asc', round = false, onLoaded }) {
       this.columns = columns;
       this.fetchPage = fetch;
       this.onRowClick = onRowClick;
       this.onLoaded = onLoaded;
+      this.onKey = onKey;
+      this.active = -1; // keyboard / clicked row
       this.rowClass = rowClass;
       this.rowHeight = rowHeight;
       this.pageSize = pageSize;
@@ -35,6 +37,15 @@
       this.el = h('div', { class: `vt${round ? ' round' : ''}` }, this.head, this.body);
       this.tpl = tpl;
       this.body.addEventListener('scroll', () => this.schedule());
+      // Arrow keys walk the rows (and show each in the details panel).
+      this.body.tabIndex = 0;
+      this.body.addEventListener('keydown', (ev) => {
+        if (ev.target !== this.body) return;
+        const step = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10 }[ev.key];
+        if (step) { ev.preventDefault(); this.activate(Math.max(0, Math.min(this.total - 1, (this.active < 0 ? -1 : this.active) + step))); return; }
+        const r = this.active >= 0 ? this.rowAt(this.active) : null;
+        if (r && this.onKey && this.onKey(ev, r, this.active)) ev.preventDefault();
+      });
       new ResizeObserver(() => this.schedule()).observe(this.body);
       this.markSort();
     }
@@ -55,8 +66,26 @@
       this.reload();
     }
 
+    async activate(i) {
+      if (i < 0 || i >= this.total) return;
+      this.active = i;
+      const rh = this.rowHeight;
+      if (i * rh < this.body.scrollTop) this.body.scrollTop = i * rh;
+      else if ((i + 1) * rh > this.body.scrollTop + this.body.clientHeight) this.body.scrollTop = (i + 1) * rh - this.body.clientHeight;
+      let r = this.rowAt(i);
+      if (!r) {
+        const p = Math.floor(i / this.pageSize);
+        const res = await this.fetchPage(p * this.pageSize, this.pageSize, this.sort, this.dir);
+        this.pages.set(p, res.rows);
+        r = this.rowAt(i);
+      }
+      this.render();
+      if (r && this.onRowClick && this.active === i) this.onRowClick(r, i);
+    }
+
     async reload({ keepScroll = false } = {}) {
       const gen = ++this.gen;
+      if (!keepScroll) this.active = -1;
       this.pages.clear();
       if (!keepScroll) this.body.scrollTop = 0;
       try {
@@ -104,7 +133,7 @@
       const rows = [];
       for (let i = first; i < last; i++) {
         const r = this.rowAt(i);
-        const el = h('div', { class: `vt-r${i % 2 ? ' alt' : ''}${r ? '' : ' loading'}${r && this.rowClass ? ` ${this.rowClass(r) || ''}` : ''}`, style: { top: `${i * rh}px`, gridTemplateColumns: this.tpl, height: `${rh}px` } },
+        const el = h('div', { class: `vt-r${i % 2 ? ' alt' : ''}${r ? '' : ' loading'}${r && this.rowClass ? ` ${this.rowClass(r) || ''}` : ''}${i === this.active ? ' active' : ''}`, style: { top: `${i * rh}px`, gridTemplateColumns: this.tpl, height: `${rh}px` } },
           this.columns.map((c) => {
             if (!r) return h('span', { text: '·' });
             const v = c.render ? c.render(r, i) : r[c.key];
@@ -113,7 +142,7 @@
             if (c.titleOf && r) cell.title = c.titleOf(r);
             return cell;
           }));
-        if (r && this.onRowClick) { el.style.cursor = 'pointer'; el.addEventListener('click', (ev) => { if (!ev.target.closest('input, button, label')) this.onRowClick(r, i); }); }
+        if (r && this.onRowClick) { el.style.cursor = 'pointer'; el.addEventListener('click', (ev) => { if (!ev.target.closest('input, button, label')) { this.active = i; this.body.focus({ preventScroll: true }); this.render(); this.onRowClick(r, i); } }); }
         rows.push(el);
       }
       this.body.replaceChildren(this.spacer, this.empty, ...rows);

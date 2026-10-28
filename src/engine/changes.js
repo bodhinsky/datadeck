@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { tx } = require('./db');
-const { buildWhere } = require('./query');
+const { buildWhere, FI_JOIN } = require('./query');
 const { TARGETS, nameProblems, sanitizeName, isJunk } = require('./compat');
 const { renderTarget, checkTemplate } = require('./template');
 
@@ -54,7 +54,7 @@ function resolveSelection(db, sourceId, sel = {}) {
   if (Array.isArray(sel.ids)) filter.ids = sel.ids;
   else if (!sel.filter) throw new Error('Nothing selected.');
   const { where, params } = buildWhere(filter);
-  return db.prepare(`SELECT e.rel_path FROM entries e WHERE ${where}`).all(...params).map((r) => r.rel_path);
+  return db.prepare(`SELECT e.rel_path FROM entries e ${FI_JOIN} WHERE ${where}`).all(...params).map((r) => r.rel_path);
 }
 
 function validateChange(op, params, items, db, sourceId) {
@@ -169,7 +169,9 @@ function setTarget(db, { sourceId, targetFs }) {
 function evaluate(db, sourceId) {
   const ws = workspace(db, sourceId);
   const target = TARGETS[ws.target_fs] || TARGETS.apfs;
-  const entries = db.prepare('SELECT id, rel_path, parent, name, ext, kind, category, size, mtime, hash, error FROM entries WHERE source_id = ? ORDER BY rel_path').all(sourceId);
+  const entries = db.prepare(`SELECT e.id, e.rel_path, e.parent, e.name, e.ext, e.kind, e.category, e.size, e.mtime, e.hash, e.error,
+    f.type AS ftype, f.taken, f.created AS fcreated, f.camera, f.artist, f.album, f.width, f.height
+    FROM entries e ${FI_JOIN} WHERE e.source_id = ? ORDER BY e.rel_path`).all(sourceId);
   const n = entries.length;
   const idx = new Map();
   for (let i = 0; i < n; i++) idx.set(entries[i].rel_path, i);

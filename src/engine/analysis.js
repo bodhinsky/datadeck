@@ -23,6 +23,7 @@ const ISSUE_INFO = {
   'empty-dir': { severity: 'info', label: 'Empty folder', hint: 'Contains nothing.' },
   junk: { severity: 'info', label: 'System clutter', hint: '.DS_Store, Thumbs.db, ._ files and similar.' },
   hardlink: { severity: 'info', label: 'Hard link', hint: 'Same data appears under several names. A plain copy duplicates it.' },
+  'type-mismatch': { severity: 'warn', label: 'Wrong extension', hint: 'The content is a different type than the extension says (e.g. a HEIC photo named .jpg). Apps may refuse to open it.' },
 };
 
 function computeIssues(db, sourceId) {
@@ -114,7 +115,30 @@ function overview(db, sourceId) {
   const dupes = one(`SELECT COUNT(*) AS groups, COALESCE(SUM(n - 1), 0) AS extra, COALESCE(SUM((n - 1) * size), 0) AS wasted FROM
     (SELECT hash, size, COUNT(*) AS n FROM entries WHERE source_id = ? AND kind = 'file' AND hash IS NOT NULL GROUP BY hash, size HAVING n > 1)`);
 
+  // What is inside the files (filled by the inspect pass after a scan).
+  const FJ = 'FROM entries e JOIN fileinfo f ON f.source_id = e.source_id AND f.rel_path = e.rel_path WHERE e.source_id = ?';
+  const content = one(`SELECT COUNT(*) AS inspected, SUM(f.mismatch) AS mismatched, SUM(f.taken IS NOT NULL) AS withTaken,
+      SUM(f.gps_lat IS NOT NULL) AS withGps, SUM(f.duration IS NOT NULL) AS withDuration, COALESCE(SUM(f.duration), 0) AS totalDuration,
+      SUM(f.family IN ('image', 'video') AND f.taken IS NULL) AS mediaUndated, SUM(f.last_used IS NOT NULL) AS withLastUsed,
+      SUM(f.tags IS NOT NULL) AS tagged, SUM(f.where_from IS NOT NULL) AS downloaded, SUM(f.error IS NOT NULL) AS failed,
+      MIN(f.taken) AS takenFirst, MAX(f.taken) AS takenLast ${FJ}`);
+  content.files = one(`SELECT COUNT(*) AS n FROM entries WHERE source_id = ? AND kind = 'file'`).n;
+  const realTypes = q(`SELECT COALESCE(f.type, '(not recognised)') AS key, f.family AS family, COUNT(*) AS count, SUM(e.size) AS bytes, SUM(f.mismatch) AS mismatched ${FJ}
+    GROUP BY key ORDER BY bytes DESC LIMIT 40`);
+  const cameras = q(`SELECT f.camera AS key, COUNT(*) AS count, SUM(e.size) AS bytes, MIN(f.taken) AS oldest, MAX(f.taken) AS newest ${FJ} AND f.camera IS NOT NULL
+    GROUP BY f.camera ORDER BY count DESC LIMIT 30`);
+  const takenYears = q(`SELECT strftime('%Y', f.taken / 1000, 'unixepoch', 'localtime') AS key, COUNT(*) AS count, SUM(e.size) AS bytes ${FJ} AND f.taken IS NOT NULL
+    GROUP BY key ORDER BY key DESC`);
+  const artists = q(`SELECT f.artist AS key, COUNT(*) AS count, SUM(e.size) AS bytes, COALESCE(SUM(f.duration), 0) AS duration ${FJ} AND f.artist IS NOT NULL
+    GROUP BY f.artist ORDER BY count DESC LIMIT 30`);
+  const now = Date.now();
+  const YEAR = 365.25 * 864e5;
+  const lastUsed = [['Last 30 days', now - 30 * 864e5, now + 864e5], ['1–12 months', now - YEAR, now - 30 * 864e5], ['1–3 years', now - 3 * YEAR, now - YEAR],
+    ['Over 3 years', 0, now - 3 * YEAR]].map(([key, lo, hi]) => ({ key, lo, hi, ...one(`SELECT COUNT(*) AS count, COALESCE(SUM(e.size), 0) AS bytes ${FJ}
+      AND COALESCE(f.last_used, e.mtime) >= ? AND COALESCE(f.last_used, e.mtime) < ?`, lo, hi) }));
+
   return {
+    content, realTypes, cameras, takenYears, artists, lastUsed,
     source, categories, extensions, sizes, years, depths, topFolders, largest, issues,
     range: { ...range, medianSize: median ? median.size : 0 },
     dupes: { ...dupes, hashedFiles: hashed.n },

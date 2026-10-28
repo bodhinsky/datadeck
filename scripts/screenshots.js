@@ -23,13 +23,35 @@ function makeDemo(dir) {
     const t = new Date(Date.UTC(year, Math.floor(rnd() * 12), 1 + Math.floor(rnd() * 27))) / 1000;
     fs.utimesSync(f, t, t);
   };
-  const trips = ['Lisbon', 'Alps', 'Kyoto', 'Iceland'];
-  trips.forEach((t, ti) => { for (let i = 0; i < 40; i++) put(`Photos/${2019 + ti}/${t}/IMG_${4000 + ti * 100 + i}.jpg`, 60000 + Math.floor(rnd() * 400000), 2019 + ti); });
-  for (let i = 0; i < 18; i++) put(`Photos/${2023}/Phone/IMG_${7000 + i}.heic`, 90000 + Math.floor(rnd() * 200000), 2023);
+  // Real JPEGs with EXIF: the date taken and camera are patched into a
+  // template per file, and the file dates are the (later) copy dates.
+  const scenes = fs.readdirSync(path.join(root, 'test/fixtures/demo')).sort().map((f) => fs.readFileSync(path.join(root, 'test/fixtures/demo', f)));
+  const photo = (sceneNo, taken, model) => {
+    const b = Buffer.from(scenes[sceneNo % scenes.length]);
+    const p2 = (n) => String(n).padStart(2, '0');
+    const stamp = taken ? `${taken.getFullYear()}:${p2(taken.getMonth() + 1)}:${p2(taken.getDate())} ${p2(taken.getHours())}:${p2(taken.getMinutes())}:${p2(taken.getSeconds())}` : '0000:00:00 00:00:00';
+    b.write(stamp, b.indexOf('2000:01:01 00:00:00'), 'latin1');
+    b.write(model.padEnd(17, ' ').slice(0, 17), b.indexOf('MODEL_SLOT_______'), 'latin1');
+    b.write(model.startsWith('Canon') ? 'Canon' : 'Apple', b.indexOf('MAKE_'), 'latin1');
+    return b;
+  };
+  const trips = [['Lisbon', 'iPhone 11'], ['Alps', 'iPhone 12 Pro'], ['Kyoto', 'iPhone 13 Pro'], ['Iceland', 'iPhone 14 Pro']];
+  trips.forEach(([t, cam], ti) => {
+    for (let i = 0; i < 40; i++) {
+      const taken = new Date(2019 + ti, 3 + ti * 2, 3 + Math.floor(i / 8), 9 + (i % 8), i, (i * 7) % 60);
+      put(`Photos/${2019 + ti}/${t}/IMG_${4000 + ti * 100 + i}.jpg`, 0, 2021 + (ti % 3), photo(i + ti, i % 13 === 5 ? null : taken, i % 9 === 4 ? 'Canon EOS R6' : cam));
+    }
+  });
+  for (let i = 0; i < 18; i++) put(`Photos/${2023}/Phone/IMG_${7000 + i}.jpg`, 0, 2024, photo(i, new Date(2023, 6, 1 + i, 12, i), 'iPhone 15 Pro'));
+  // Misnamed: JPEG data with a .png name, as some messengers do.
+  for (let i = 0; i < 3; i++) put(`Downloads/WhatsApp Image ${i + 1}.png`, 0, 2024, photo(i + 2, new Date(2024, 1, 10 + i, 18), 'iPhone 15 Pro'));
   for (let i = 0; i < 8; i++) put(`Videos/Clips/clip_${i}.mov`, 900000 + Math.floor(rnd() * 2500000), 2020 + (i % 5));
   for (let i = 0; i < 30; i++) put(`Documents/Uni/Semester ${1 + (i % 6)}/notes-${i}.pdf`, 20000 + Math.floor(rnd() * 300000), 2018 + (i % 6));
   for (let i = 0; i < 12; i++) put(`Documents/Finance/statement-${2020 + (i % 4)}-${i}.xlsx`, 15000 + Math.floor(rnd() * 40000), 2020 + (i % 4));
-  for (let i = 0; i < 20; i++) put(`Music/Live Sets/set-${i}.flac`, 400000 + Math.floor(rnd() * 900000), 2017 + (i % 7));
+  const songs = ['song.mp3', 'track.flac', 'voice.m4a'].map((f) => fs.readFileSync(path.join(root, 'test/fixtures/media', f)));
+  for (let i = 0; i < 20; i++) put(`Music/Live Sets/set-${i}.${['mp3', 'flac', 'm4a'][i % 3]}`, 0, 2017 + (i % 7), Buffer.concat([songs[i % 3], Buffer.from([i])]));
+  put('Documents/Uni/Thesis draft.docx', 0, 2023, fs.readFileSync(path.join(root, 'test/fixtures/media/report.docx')));
+  put('Documents/Uni/Reading list.txt', 0, 2023, 'Reading list\n\n1. Designing Data-Intensive Applications\n2. The Pragmatic Programmer\n3. Thinking, Fast and Slow\n');
   for (let i = 0; i < 25; i++) put(`Code/projects/app/src/module${i}/index.js`, 800 + Math.floor(rnd() * 9000), 2024);
   put('Code/projects/app/assets/a/b/c/d/e/f/g/h/deep.json', 400, 2024);
   put('Downloads/setup.dmg', 3200000, 2025);
@@ -92,8 +114,16 @@ function makeDemo(dir) {
   await win.click('#page-dupes >> text=Find duplicates');
   await win.waitForSelector('#page-dupes >> text=Keep one of each…', { timeout: 60000 });
   await shot('3-duplicates');
+  await win.waitForSelector('#page-dupes .vt-r:nth-of-type(3):not(.loading)');
+  await win.click('#page-dupes .vt-r:nth-of-type(3)');
+  await win.waitForSelector('.cmp-col img', { timeout: 10000 });
+  await win.click('.cmp-col:nth-child(1) >> text=Keep this one');
+  await shot('3b-compare', 600);
+  await win.click('.modal-f >> text=Cancel');
   await nav('overview');
   await shot('1-overview', 700);
+  await win.evaluate(() => document.querySelector('#page-overview .sec-h').scrollIntoView());
+  await shot('1b-inside-files', 500);
   await nav('issues');
   await shot('4-issues', 700);
 
@@ -111,7 +141,7 @@ function makeDemo(dir) {
   await win.click('#page-explorer .chip >> text=image');
   await win.waitForTimeout(500);
   await win.click('#page-explorer >> text=Lay out these…');
-  await win.click('#page-restructure .chip >> text=By date');
+  await win.click('#page-restructure .chip >> text=Photos by date taken');
   await win.waitForTimeout(400);
   await shot('5-layout', 300);
   await win.click('#btnStageLayout');
@@ -126,6 +156,20 @@ function makeDemo(dir) {
   await win.click('#page-explorer .vt-r:nth-of-type(6) .rowchk');
   await shot('2-explorer', 600);
   await win.click('.selbar >> text=Clear');
+  // The details panel: click a photo, then walk with the arrow keys.
+  await win.click('#page-explorer .seg >> text=None');
+  await win.click('#page-explorer >> text=Content filters ▾');
+  await win.fill('#page-explorer input[placeholder="iPhone"]', 'iPhone 12');
+  await entries(36);
+  await win.waitForSelector('#page-explorer .vt-r:nth-of-type(5):not(.loading)');
+  await win.click('#page-explorer .vt-r:nth-of-type(5) > span:nth-child(2)');
+  await win.waitForSelector('.dpanel .dp-prev img', { timeout: 10000 });
+  await win.keyboard.press('ArrowDown');
+  await win.waitForTimeout(300);
+  await win.waitForSelector('.dpanel .dp-prev img', { timeout: 10000 });
+  await shot('2b-details', 500);
+  await win.click('#page-explorer >> text=Reset');
+  await win.keyboard.press('Escape');
   await nav('changes');
   await win.fill('#commitMsg', 'Sort photos by date, drop duplicates and clutter');
   await win.click('#page-changes >> text=/Commit \\d+ changes/');

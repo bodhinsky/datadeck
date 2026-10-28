@@ -1,5 +1,5 @@
 'use strict';
-/* global DD, deck */
+/* global DD */
 // Duplicates: run the three-pass check, then review groups by wasted space.
 (function () {
   const { h, $ } = DD;
@@ -62,11 +62,11 @@
         { label: 'SHA-256', width: '110px', mono: true, cls: 'dim', render: (r) => (r.mi === 0 ? r.g.hash.slice(0, 12) : '') },
       ],
       fetch: async (offset, limit) => ({ rows: rows.slice(offset, offset + limit), total: rows.length }),
-      onRowClick: (r) => deck.showItem(`${src.path}/${r.m.rel_path}`),
+      onRowClick: (r) => DD.compare(r.g.members.map((m) => m.id)),
     });
     const wrap = h('div', { style: { height: '60vh', display: 'flex' } }, table.el);
     el.replaceChildren(head, kpis,
-      h('div', { class: 'callout' }, h('span', { class: 'grow', text: 'DataDeck never deletes duplicates on its own. Use “Keep one of each” to stage leaving the extra copies out of an export, or click a row to show the file in Finder.' })),
+      h('div', { class: 'callout' }, h('span', { class: 'grow', text: 'DataDeck never deletes duplicates on its own. Use “Keep one of each” to stage leaving the extra copies out of an export, or click a row to compare the copies side by side and pick the one to keep.' })),
       wrap);
     table.reload();
   }

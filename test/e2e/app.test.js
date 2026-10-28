@@ -193,6 +193,95 @@ async function openSync(win) {
   await win.waitForSelector('#p-source');
 }
 
+test('file details: real types, photo facts, preview panel, keyboard triage, compare copies', { timeout: 180000 }, async () => {
+  const FX = path.join(root, 'test', 'fixtures', 'media');
+  const src = path.join(work, 'media');
+  const photo = fs.readFileSync(path.join(FX, 'photo.jpg'));
+  write(src, 'Camera/photo.jpg', photo);
+  write(src, 'Backup/photo copy.jpg', photo); // identical copy
+  write(src, 'Chat/image.png', fs.readFileSync(path.join(FX, 'really-a-jpeg.png')));
+  write(src, 'Music/song.mp3', fs.readFileSync(path.join(FX, 'song.mp3')));
+  write(src, 'notes.txt', 'line1\nline2\n<script>document.title="x"</script>\n');
+  const before = snapshot(src);
+
+  const { app, win, errors } = await launch(path.join(work, 'data-details'));
+  try {
+    await answerDialog(app, src);
+    await win.click('#btnAddSource');
+    // The scan reads file details afterwards; the overview grows a section.
+    await win.waitForSelector('#page-overview .sec-h', { timeout: 60000 });
+    const kpi = win.locator('#page-overview .kpi.click', { hasText: 'Wrong extension' });
+    assert.match(await kpi.textContent(), /Wrong extension\s*1/i);
+    assert.match(await win.textContent('#page-overview'), /Canon EOS R6/);
+    assert.match(await win.textContent('#page-overview'), /Nils Frahm/);
+
+    // Click the KPI: the Explorer lists the misnamed file.
+    await kpi.click();
+    await win.waitForFunction(() => /^1 entries/.test(document.querySelector('#page-explorer .statusline').textContent.trim()), null, { timeout: 5000 });
+    await win.click('#page-explorer .vt-r > span:nth-child(2)');
+    await win.waitForSelector('.dpanel .dp-prev img', { timeout: 10000 });
+    const panel = await win.textContent('.dpanel');
+    assert.match(panel, /Real type\s*JPEG/);
+    assert.match(panel, /not \.png/);
+    assert.match(await win.getAttribute('.dpanel .dp-prev img', 'src'), /^data:image\/jpeg;base64,/);
+    // E stages an exclusion for the active row.
+    await win.keyboard.press('e');
+    await waitWs(win, /1 staged/);
+
+    // Content filters: camera.
+    await win.click('#page-explorer >> text=Reset');
+    // The content filter row opened by itself for the "wrong extension" filter.
+    assert.ok(await win.isVisible('#page-explorer input[placeholder="iPhone"]'));
+    await win.fill('#page-explorer input[placeholder="iPhone"]', 'canon');
+    await win.waitForFunction(() => /^2 entries/.test(document.querySelector('#page-explorer .statusline').textContent.trim()), null, { timeout: 5000 });
+    await win.click('#page-explorer .vt-r > span:nth-child(2)');
+    await win.waitForFunction(() => /f\/2\.8/.test(document.querySelector('.dpanel').textContent), null, { timeout: 5000 });
+    const p2 = await win.textContent('.dpanel');
+    assert.match(p2, /Canon EOS R6/);
+    assert.match(p2, /ISO 400/);
+    // Arrow keys walk to the next row and the panel follows.
+    const first = await win.textContent('.dpanel .dp-title b');
+    await win.keyboard.press('ArrowDown');
+    await win.waitForFunction((n) => document.querySelector('.dpanel .dp-title b').textContent !== n, first, { timeout: 5000 });
+
+    // Text preview, rendered as text.
+    await win.click('#page-explorer >> text=Reset');
+    await win.fill('#page-explorer input[placeholder="*.jpg, IMG_*"]', 'notes.txt');
+    await win.waitForFunction(() => /^1 entries/.test(document.querySelector('#page-explorer .statusline').textContent.trim()), null, { timeout: 5000 });
+    await win.click('#page-explorer .vt-r > span:nth-child(2)');
+    await win.waitForSelector('.dpanel .dp-text', { timeout: 5000 });
+    assert.match(await win.textContent('.dpanel .dp-text'), /line1\nline2/);
+    assert.notEqual(await win.title(), 'x');
+    await win.keyboard.press('Escape');
+    await win.waitForSelector('.dpanel', { state: 'hidden' });
+
+    // Previews only take catalog ids, never paths.
+    const bad = await win.evaluate(async () => {
+      const out = [];
+      for (const v of ['/etc/passwd', '../x', -1, 1.5, 999999]) { try { await deck.preview(v); out.push('ok'); } catch { out.push('rejected'); } }
+      return out;
+    });
+    assert.deepEqual(bad, ['rejected', 'rejected', 'rejected', 'rejected', 'rejected']);
+
+    // Duplicates: compare side by side, keep one.
+    await nav(win, 'dupes');
+    await win.click('#page-dupes >> text=Find duplicates');
+    await win.waitForSelector('#page-dupes .vt-r', { timeout: 30000 });
+    await win.click('#page-dupes .vt-r');
+    await win.waitForSelector('.cmp-col img', { timeout: 10000 });
+    assert.equal(await win.locator('.cmp-col').count(), 2);
+    assert.match(await win.textContent('.modal'), /Byte-identical/);
+    await win.click('.cmp-col:nth-child(2) >> text=Keep this one');
+    await modalOk(win);
+    await waitWs(win, /2 staged/);
+
+    assert.deepEqual(snapshot(src), before, 'looking at files changes nothing');
+    assert.deepEqual(errors, []);
+  } finally {
+    await app.close();
+  }
+});
+
 test('sync: setup, preview, mirror with verify, history, persistence', { skip: noRsync, timeout: 180000 }, async () => {
   const data = path.join(work, 'data1');
   const src = path.join(work, 'src');

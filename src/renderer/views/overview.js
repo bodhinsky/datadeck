@@ -66,7 +66,31 @@
       DD.card('Folder depth', DD.statTable({ rows: o.depths.map((d) => ({ ...d, key: String(d.key) })), total: filesTotal, keyLabel: 'Level', alt: true, onClick: (r) => explore({ depthMin: Number(r.key), depthMax: Number(r.key) }) }), { flush: true }),
       DD.card('Largest files', largestTable(o.largest), { flush: true }),
     ];
-    el.replaceChildren(head, kpis, h('div', { class: 'grid' }, cards));
+    // What is inside the files, once the inspect pass has run.
+    const c = o.content;
+    const content = [];
+    if (c && c.inspected) {
+      content.push(DD.kpis([
+        { k: 'Wrong extension', v: DD.fmtNum(c.mismatched || 0), d: 'content differs from the name', tone: c.mismatched ? 'warn' : 'ok', title: 'Click to list', click: () => explore({ mismatch: true }) },
+        { k: 'Date taken', v: DD.fmtNum(c.withTaken || 0), d: c.takenFirst ? `${new Date(c.takenFirst).getFullYear()} – ${new Date(c.takenLast).getFullYear()}` : 'no photos or videos with a date' },
+        { k: 'Undated media', v: DD.fmtNum(c.mediaUndated || 0), d: 'photos/videos without date taken', tone: c.mediaUndated ? 'warn' : '', click: () => explore({ taken: 'no' }) },
+        { k: 'With location', v: DD.fmtNum(c.withGps || 0), d: 'GPS in photos and videos', click: () => explore({ gps: 'yes' }) },
+        { k: 'Playing time', v: c.totalDuration ? DD.fmtLen(c.totalDuration) : '–', d: `${DD.fmtNum(c.withDuration || 0)} audio/video files` },
+        c.withLastUsed ? { k: 'Finder tags', v: DD.fmtNum(c.tagged || 0), d: `${DD.fmtNum(c.downloaded || 0)} downloaded files`, click: () => explore({ hasTags: true }) } : null,
+      ]));
+      const ty = (k) => (k.startsWith('(') ? k : DD.typeLabel(k));
+      content.push(h('div', { class: 'grid' },
+        DD.card('Real file types', DD.statTable({ rows: o.realTypes, total: filesTotal, keyLabel: 'Content', fmtKey: (k, r) => h('span', {}, ty(k), r.mismatched ? h('span', { class: 'tag warn', text: `${r.mismatched} misnamed` }) : null), onClick: (r) => !r.key.startsWith('(') && explore({ ftypes: [r.key] }) }), { flush: true, hint: 'read from the content, not the name' }),
+        o.takenYears.length ? DD.card('Date taken', DD.statTable({ rows: o.takenYears, total: filesTotal, keyLabel: 'Year', alt: true, onClick: (r) => explore({ taken: 'yes', takenFrom: new Date(Number(r.key), 0, 1).getTime(), takenTo: new Date(Number(r.key) + 1, 0, 1).getTime() - 1 }) }), { flush: true, hint: 'from EXIF and video metadata' }) : null,
+        o.cameras.length ? DD.card('Cameras and phones', DD.statTable({ rows: o.cameras, total: filesTotal, keyLabel: 'Camera', onClick: (r) => explore({ camera: r.key }), extra: { label: 'Years', value: (r) => (r.oldest ? `${new Date(r.oldest).getFullYear()}–${new Date(r.newest).getFullYear()}` : '–') } }), { flush: true }) : null,
+        o.artists.length ? DD.card('Artists', DD.statTable({ rows: o.artists, total: filesTotal, keyLabel: 'Artist', alt: true, onClick: (r) => explore({ artist: r.key }), extra: { label: 'Length', value: (r) => DD.fmtLen(r.duration) } }), { flush: true }) : null,
+        DD.card(c.withLastUsed ? 'Last opened' : 'Last opened or modified', DD.statTable({ rows: o.lastUsed, total: filesTotal, keyLabel: 'When', alt: true, onClick: (r) => explore({ kinds: ['file'], unusedSince: r.hi }) }), { flush: true, hint: c.withLastUsed ? 'from Spotlight; modified date where unknown' : 'last-opened dates come from Spotlight on a Mac' }),
+      ));
+    } else if (c && c.files) {
+      content.push(h('div', { class: 'callout' }, h('span', { class: 'grow', text: 'File details (real types, date taken, camera, length, tags) are read after a scan. Rescan to read them for this source.' }),
+        h('button', { class: 'btn small', text: 'Read file details', onclick: () => DD.call('inspect.start', { sourceId: s.id }) })));
+    }
+    el.replaceChildren(head, kpis, h('div', { class: 'grid' }, cards), content.length ? h('h2', { class: 'sec-h', text: 'Inside the files' }) : null, ...content);
   }
 
   function issuesTable(issues) {

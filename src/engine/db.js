@@ -157,6 +157,24 @@ CREATE TABLE IF NOT EXISTS vstate (
   change_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_vstate_src ON vstate(source_id, flags);
+
+-- What is inside each file (inspect.js). Keyed by path, not entry id, so it
+-- survives a rescan; size and mtime say which version of the file it describes.
+CREATE TABLE IF NOT EXISTS fileinfo (
+  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  rel_path TEXT NOT NULL,
+  size INTEGER, mtime INTEGER,
+  type TEXT, mime TEXT, family TEXT, mismatch INTEGER NOT NULL DEFAULT 0,
+  taken INTEGER, width INTEGER, height INTEGER, duration REAL,
+  camera TEXT, lens TEXT, gps_lat REAL, gps_lon REAL,
+  title TEXT, artist TEXT, album TEXT, author TEXT, pages INTEGER, bitrate INTEGER, created INTEGER,
+  last_used INTEGER, tags TEXT, where_from TEXT,
+  extra TEXT, error TEXT, inspected_at INTEGER,
+  PRIMARY KEY (source_id, rel_path)
+);
+CREATE INDEX IF NOT EXISTS ix_fi_taken ON fileinfo(source_id, taken);
+CREATE INDEX IF NOT EXISTS ix_fi_camera ON fileinfo(source_id, camera);
+CREATE INDEX IF NOT EXISTS ix_fi_type ON fileinfo(source_id, type);
 `;
 
 function openDb(file) {
