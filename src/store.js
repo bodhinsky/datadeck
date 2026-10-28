@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const HISTORY_LIMIT = 300;
-const DEFAULT_SETTINGS = { rsyncPath: '', theme: 'retro', notifications: true, preventSleep: true };
+const DEFAULT_SETTINGS = { rsyncPath: '', theme: 'system', notifications: true, preventSleep: true };
 
 // JSON files in the app's data folder. Every write goes to a temp file that is
 // fsynced and renamed over the old one, so a crash never leaves half a file.

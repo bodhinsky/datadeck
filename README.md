@@ -1,117 +1,124 @@
-# SyncDeck
+# DataDeck
 
-A local, retro-styled rsync cockpit for macOS. Pick a source and a destination,
-flip the flags you want, preview exactly what will change, then sync with live
-progress, automatic reconnects and a checksum verification at the end.
+A local data management cockpit for macOS. Point it at a folder of any depth,
+see what is in it as statistics and sortable tables, find duplicates and names
+that will break on other systems, filter down to exactly the files you mean,
+then copy or move them into a new structure. Every change is planned first,
+verified by SHA-256, journaled, and can be undone. Folder-to-folder or
+folder-to-server sync with rsync is built in.
 
-![Setup](docs/screenshots/1-setup.png)
+![Overview](docs/screenshots/1-overview.png)
 
 ## Quick start (on your Mac)
 
 ```bash
-brew install rsync node     # rsync 3.x gives you full progress, resume and safety features
+brew install node rsync     # rsync 3.x is only needed for the Sync page
 cd syncdeck
 npm install
 npm start                   # run the app
-npm run dist                # optional: build dist/SyncDeck-1.0.0-arm64.dmg
+npm run dist                # optional: build dist/DataDeck-1.0.0-arm64.dmg
 ```
 
-SyncDeck finds Homebrew's rsync on its own (`/opt/homebrew/bin/rsync`, then
-`/usr/local/bin/rsync`, then `/usr/bin/rsync`). It also works with the
-`openrsync` that ships with macOS, but tells you which safety features that
-version is missing.
-
 The app is not code-signed. If macOS refuses to open a built `.app`, right-click
-it and choose **Open**, or run `xattr -cr /Applications/SyncDeck.app`.
+it and choose **Open**, or run `xattr -cr /Applications/DataDeck.app`.
 
-## What it does
+## Pages
 
 | | |
 |---|---|
-| **Profiles** | Saved sync jobs in the sidebar. Every edit autosaves. |
-| **Route** | Source and destination with a folder picker, or `user@host:/path` for SSH. A switch makes rsync's trailing-slash rule explicit and shows where files will land. |
-| **Flags** | Archive, checksum compare, compress, skip newer, ignore existing, hard links, ACLs, xattrs, one filesystem, numeric IDs, delayed updates, delete. Flags your rsync can't do are greyed out. |
-| **Preview** | A dry run that lists every new, changed and deleted file before anything is touched. One click runs the real sync from there. |
-| **Live deck** | Overall %, speed, ETA, current file, attempt counter, and a waveform that fills as data moves. |
-| **Transfers** | Virtualised list of every itemised change, with filters and search. Handles very large trees. |
-| **Live log** | Raw rsync output, including the exact command of every attempt. |
-| **History** | Every run with status, size, duration, attempts and verify result. |
+| **Sources** | Any folder, any depth. Scanned into a local catalog (metadata only, never file contents). Symlinks are recorded but not followed; unreadable parts are listed instead of stopping the scan. |
+| **Overview** | Files, size, depth, date range, duplicates and issues at a glance, plus tables by type, size class, year, extension, depth, largest folders and largest files. Every row opens the Explorer filtered to it. |
+| **Explorer** | One virtual table for millions of entries. Filter by name pattern, path, extension, type, size, date, depth, issues or duplicates; group by type, extension, year, month, top folder or folder; sort any column; export the result as CSV. |
+| **Duplicates** | Byte-identical files: size, then a quick fingerprint, then a full SHA-256. Shows reclaimable space per group. Never deletes anything; offers an export that keeps one copy each. |
+| **Issues** | Case and Unicode collisions, names invalid on Windows/exFAT/FAT32, trailing dots, too-long names and paths, >4 GB files for FAT32, odd dates, empty files and folders, clutter, broken links, unreadable entries. |
+| **Restructure** | Take the current selection, choose a target and a layout (presets or a template such as `{category}/{yyyy}/{mm}/{name}`), see a live preview, build a plan, review every single operation, run it, undo it. Names are cleaned for the target file system. |
+| **Plans & undo** | Every plan with its per-file journal: what went where, both checksums, the result. Resume interrupted plans, export the journal, undo finished ones. |
+| **Sync** | Saved rsync profiles: preview, mirror or copy, automatic reconnects after network drops, checksum verification afterwards, live log and history. |
+| **Jobs / Settings** | Background work with progress and cancel; rsync path, notifications, keep-awake, light/dark/auto theme. |
 
-Shortcuts: `⌘⇧P` preview, `⌘R` run, `⌘.` stop, `⌘N` new profile.
+Shortcuts: `⌘O` add source, `⌘N` new sync profile, `⌘⇧P` sync preview, `⌘R` run sync, `⌘.` stop.
+
+| | |
+|---|---|
+| ![Explorer](docs/screenshots/2-explorer.png) | ![Duplicates](docs/screenshots/3-duplicates.png) |
+| ![Restructure](docs/screenshots/5-restructure.png) | ![Plan](docs/screenshots/6-plan-done.png) |
+| ![Sync](docs/screenshots/7-sync-preview.png) | ![Dark](docs/screenshots/9-dark.png) |
 
 ## Data integrity and safety
 
-* **Verify after sync** (on by default): after the copy, a second rsync pass in
-  checksum dry-run mode reads both sides and lists anything whose content
-  differs. Silent corruption that rsync's size+mtime quick check can't see is
-  caught here (see `test/integration/local.test.js`).
-* **Resume after network trouble:** `--partial-dir=.rsync-partial` keeps half
-  copied files; `--timeout` turns a frozen link into an error instead of a hang;
-  network-type exit codes (5, 10, 12, 30, 35, 255) are retried with exponential
-  backoff (5 s, 10 s, 20 s … 5 min, ±20% jitter, 8 retries by default). Each
-  retry resumes from the partial data. Permission errors and the like are not
-  retried.
-* **Delete guard rails:** delete is off by default, needs an explicit
-  confirmation, is limited by `--max-delete` (500 by default), and is refused
-  outright when the source folder is empty (an unmounted drive), when the
-  destination is `/`, your home folder or a system folder, or when one folder
-  is inside the other. An optional backup folder keeps every replaced or
-  deleted file.
-* **No shell, ever:** rsync is spawned with an argument array (`shell: false`).
-  Paths come after a literal `--`, so names like `--delete` or
-  `; rm -rf ~` are just names. `~` is expanded by the app, not a shell.
-* **Extra options are filtered:** `-e/--rsh`, `--rsync-path`, `--delete-excluded`,
-  `--log-file`, batch files and similar are refused; risky ones such as
-  `--remove-source-files` or `--inplace` need confirmation.
-* **SSH is locked down:** `BatchMode=yes` (keys only, no password prompts),
-  normal host-key checking, keep-alives so dead links are noticed, and `-s` so
-  remote paths aren't re-split by the remote shell. Plain `rsync://` daemon
-  links are flagged as unencrypted.
-* **Electron hardening:** sandboxed renderer with context isolation and no Node
-  access, a strict Content-Security-Policy, no remote content, navigation and
-  new windows blocked, file names always rendered as text. Settings are written
-  atomically (temp file, fsync, rename) with `0600` permissions.
-* The Mac is kept awake during a sync, and quitting mid-sync asks first.
+**Restructuring**
+
+* Nothing is touched until you run a plan you have reviewed.
+* Each file is written under a temporary name, fsynced, **read back and
+  compared by SHA-256**, and published with an operation that fails rather than
+  replace an existing file. Existing files are never overwritten.
+* A file that changed since the scan is skipped, not copied in a half-known state.
+* Moves on the same disk are renames (no data copied). Moves across disks
+  delete the original only after the verified copy exists.
+* Every step is journaled in SQLite (WAL, full sync). After a crash or power
+  cut the plan shows as interrupted; resuming cleans up and continues.
+* Undo moves files back (verified) or deletes copies only if they are still
+  exactly what was written. Files you edited afterwards are left alone.
+* Emptied folders are removed with `rmdir` only: DataDeck never deletes a file
+  that is not part of the plan.
+
+**Sync (rsync)**
+
+* Dry-run preview first; delete is off by default, needs confirmation, is capped
+  by `--max-delete`, and is refused for an empty source (an unmounted drive),
+  system folders, or nested source/destination.
+* Resume after network trouble with `--partial-dir`, stall timeouts, and
+  automatic retries with backoff on network exit codes.
+* A checksum verify pass after the copy catches silent corruption.
+* rsync is spawned without a shell, paths come after `--`, dangerous extra
+  options are refused, SSH runs in batch mode with host-key checking.
+
+**App**
+
+* The heavy work runs in a worker thread, so the window stays responsive; one
+  disk-heavy job at a time; the worker restarts itself after a crash.
+* Sandboxed renderer with context isolation, no Node access, strict
+  Content-Security-Policy, navigation blocked, file names always rendered as
+  text, whitelisted engine calls with bound SQL parameters.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and roadmap.
 
 ## Tests
 
 ```bash
-npm test             # unit + integration (needs rsync)
+npm test             # unit + engine + integration (103 tests; rsync needed for integration)
 npm run test:e2e     # drives the real app with Playwright (Linux: xvfb-run -a npm run test:e2e)
 npm run screenshots  # regenerates docs/screenshots
 ```
 
-* **Unit** (`test/unit`, 54 tests): argument building, injection-proof paths,
-  parsers for progress/itemize/stats in several rsync versions and locales,
-  safety validation, retry policy, the run state machine with a scripted fake
-  rsync (retry, give up, stop during backoff, verify mismatches, exit codes).
-* **Integration** (`test/integration`, 17 tests, real rsync): byte-for-byte copies
-  of hostile file names (unicode, quotes, `$(...)`, leading dashes, emoji),
-  hostile folder names, dry-run touches nothing, mirror vs. copy, max-delete,
-  backups, silent-corruption detection, excludes, stop-and-resume, unreadable
-  files, and a simulated limited/old rsync.
-* **Network drills** (`test/integration/network.test.js`): a real rsync daemon
-  behind a TCP proxy that is cut mid-transfer, taken down for seconds, frozen
-  silently, and flapped three times. Each run must recover by itself, resume
-  from partial data (the final attempt re-sends well under the full size), and
-  finish with a passing checksum verification.
-* **End-to-end** (`test/e2e`, 4 tests): the real Electron app is driven through
-  setup, preview, confirm, sync, verify, history, restart persistence,
-  stop/resume, the empty-source delete block, and a network drop that shows
-  LINK LOST and recovers.
+* **Unit** (54): rsync arguments, parsers, safety rules, retry state machine.
+* **Engine** (32): scanning odd trees (300 levels deep, Unicode, symlink loops,
+  unreadable folders, 20k files), issue rules, duplicates, CSV export, and every
+  restructure guarantee with injected corruption, simulated crashes, changed
+  sources, cross-device moves and undo.
+* **Integration** (17): real rsync with hostile file names, delete limits,
+  corruption detection, and network drills with a proxy that cuts, freezes and
+  flaps the link.
+* **End-to-end** (5): the real app, from adding a source through analysis,
+  filtering, planning, a verified copy and undo; plus preview/mirror/verify,
+  stop and resume, the empty-source guard and a network drop.
 
-A GitHub Actions workflow runs all of it on macOS (Homebrew rsync) and Linux.
+A GitHub Actions workflow runs all of it on macOS and Linux.
 
 ## Layout
 
 ```
-main.js              Electron main process: IPC, runs, history, menus
-preload.js           the small API the UI is allowed to use
-src/core/args.js     profile -> rsync argv (no shell)
-src/core/safety.js   validation, delete guards, retry policy
-src/core/runner.js   one sync job: attempts, retries, verify, events
-src/core/parse.js    itemize / progress / stats parsers
-src/core/probe.js    asks the installed rsync which options it supports
-src/store.js         atomic JSON storage
-src/renderer/        the UI (plain HTML/CSS/JS, bundled fonts)
+main.js                 Electron main: window, IPC, menus, rsync runs
+preload.js              the small API the UI is allowed to use
+src/engine/             catalog + analysis + restructure (runs in a worker thread)
+  db.js                 SQLite schema
+  scanner.js            streaming folder scan
+  analysis.js query.js  statistics, filters, grouping
+  compat.js             file-system rules and name sanitising
+  dupes.js hash.js      duplicate detection
+  template.js planner.js executor.js   plans, verified execution, recovery, undo
+  engine.js worker.js client.js        job control and the worker bridge
+src/core/               rsync: arguments, safety, runner, parsers
+src/renderer/           the UI (plain HTML/CSS/JS, bundled fonts)
+test/                   unit, engine, integration, e2e
 ```

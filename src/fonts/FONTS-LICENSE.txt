@@ -1,5 +1,5 @@
 Bundled fonts, all under the SIL Open Font License 1.1:
+- Inter (Rasmus Andersson)
 - JetBrains Mono (JetBrains)
-- Doto (Oriol Esteve)
 - Silkscreen (Jason Kottke)
-Source: Fontsource packages (@fontsource/jetbrains-mono, @fontsource/doto, @fontsource/silkscreen).
+Source: Fontsource packages (@fontsource/inter, @fontsource/jetbrains-mono, @fontsource/silkscreen).

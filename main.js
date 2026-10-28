@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker, Notification, Menu } = require('electron');
 const path = require('path');
 const { Store } = require('./src/store');
+const { EngineClient } = require('./src/engine/client');
 const { SyncRun, detectRsync } = require('./src/core/runner');
 const { buildArgs, commandPreview, newProfile, normalizeProfile, FLAGS, isRemote, expandHome } = require('./src/core/args');
 const { validateProfile } = require('./src/core/safety');
@@ -11,7 +12,9 @@ const RSYNC_CANDIDATES = ['/opt/homebrew/bin/rsync', '/usr/local/bin/rsync', '/u
 let win = null;
 let store = null;
 let rsync = null; // detected binary info
-let active = null; // { run, runId, profile, dryRun, startedAt, psb }
+let active = null;
+let engine = null; // catalog / analysis / restructure worker
+let engineBusy = false; // { run, runId, profile, dryRun, startedAt, psb }
 
 async function resolveRsync(preferred) {
   const tried = [];
@@ -54,10 +57,10 @@ function createWindow() {
     height: 860,
     minWidth: 1040,
     minHeight: 640,
-    title: 'SyncDeck',
-    backgroundColor: '#efe7d6',
+    title: 'DataDeck',
+    backgroundColor: '#f2ece0',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    trafficLightPosition: { x: 14, y: 14 },
+    trafficLightPosition: { x: 14, y: 16 },
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -75,17 +78,17 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   win.on('close', (e) => {
-    if (!active) return;
+    if (!active && !engineBusy) return;
     const choice = dialog.showMessageBoxSync(win, {
       type: 'warning',
       buttons: ['Keep syncing', 'Stop and quit'],
       defaultId: 0,
       cancelId: 0,
-      message: 'A sync is still running.',
-      detail: 'If you quit now rsync is stopped. Partially copied files are kept and the next run resumes from them.',
+      message: active ? 'A sync is still running.' : 'A job is still running.',
+      detail: 'If you quit now it is stopped safely. Partially copied files are kept or cleaned up, and the next run resumes.',
     });
     if (choice === 0) e.preventDefault();
-    else active.run.stop();
+    else if (active) active.run.stop();
   });
 }
 
@@ -97,8 +100,19 @@ function registerIpc() {
     rsync,
     flags: FLAGS,
     platform: process.platform,
+    version: app.getVersion(),
     running: active ? { runId: active.runId, profileId: active.profile.id, dryRun: active.dryRun } : null,
   }));
+
+  // Engine calls are forwarded to the worker; it rejects unknown methods.
+  ipcMain.handle('engine:call', async (_e, method, params) => {
+    if (typeof method !== 'string') throw new Error('Invalid call');
+    return engine.call(method, params);
+  });
+  ipcMain.handle('dialog:save', async (_e, { title, defaultPath } = {}) => {
+    const r = await dialog.showSaveDialog(win, { title: title || 'Export', defaultPath: defaultPath || 'export.csv', filters: [{ name: 'CSV', extensions: ['csv'] }] });
+    return r.canceled ? null : r.filePath;
+  });
 
   ipcMain.handle('profiles:new', () => newProfile());
   ipcMain.handle('profiles:save', (_e, profile) => store.saveProfile(normalizeProfile(profile)));
@@ -124,6 +138,9 @@ function registerIpc() {
       properties: ['openDirectory', 'createDirectory', 'showHiddenFiles'],
     });
     return r.canceled ? null : r.filePaths[0];
+  });
+  ipcMain.handle('shell:showItem', (_e, p) => {
+    if (typeof p === 'string' && path.isAbsolute(p)) shell.showItemInFolder(p);
   });
   ipcMain.handle('shell:reveal', (_e, p) => {
     if (typeof p === 'string' && p && !isRemote(p)) shell.openPath(expandHome(p));
@@ -223,7 +240,7 @@ function buildMenu() {
   const cmd = (c) => () => send('menu', c);
   const template = [
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
-    { label: 'File', submenu: [{ label: 'New Profile', accelerator: 'CmdOrCtrl+N', click: cmd('new-profile') }, { type: 'separator' }, { role: process.platform === 'darwin' ? 'close' : 'quit' }] },
+    { label: 'File', submenu: [{ label: 'Add Source…', accelerator: 'CmdOrCtrl+O', click: cmd('add-source') }, { label: 'New Sync Profile', accelerator: 'CmdOrCtrl+N', click: cmd('new-profile') }, { type: 'separator' }, { role: process.platform === 'darwin' ? 'close' : 'quit' }] },
     { role: 'editMenu' },
     {
       label: 'Sync',
@@ -240,13 +257,28 @@ function buildMenu() {
 }
 
 app.whenReady().then(async () => {
-  app.setName('SyncDeck');
-  store = new Store(process.env.SYNCDECK_DATA_DIR || app.getPath('userData'));
+  app.setName('DataDeck');
+  const dataDir = process.env.SYNCDECK_DATA_DIR || app.getPath('userData');
+  store = new Store(dataDir);
+  engine = new EngineClient(path.join(dataDir, 'catalog.sqlite'), { onEvent: (event, data) => {
+    if (event === 'job') engineBusy = data.status === 'running';
+    send('engine:event', { event, data });
+  } });
   rsync = await resolveRsync(process.env.SYNCDECK_RSYNC || store.settings().rsyncPath || null);
   registerIpc();
   buildMenu();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+
+let engineClosed = false;
+app.on('will-quit', (e) => {
+  // Let the worker finish its current SQLite transaction and close the WAL cleanly.
+  if (engine && !engineClosed) {
+    e.preventDefault();
+    engineClosed = true;
+    engine.close().finally(() => app.quit());
+  }
 });
 
 app.on('window-all-closed', () => {

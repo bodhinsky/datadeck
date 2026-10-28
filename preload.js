@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // The only surface the UI gets. No Node, no fs, no child_process.
 contextBridge.exposeInMainWorld('deck', {
+  engine: (method, params) => ipcRenderer.invoke('engine:call', method, params),
+  onEngineEvent: (fn) => ipcRenderer.on('engine:event', (_e, m) => fn(m.event, m.data)),
+  saveFile: (opts) => ipcRenderer.invoke('dialog:save', opts),
   init: () => ipcRenderer.invoke('app:init'),
   newProfile: () => ipcRenderer.invoke('profiles:new'),
   saveProfile: (p) => ipcRenderer.invoke('profiles:save', p),
@@ -11,6 +14,7 @@ contextBridge.exposeInMainWorld('deck', {
   detectRsync: () => ipcRenderer.invoke('rsync:detect'),
   clearHistory: () => ipcRenderer.invoke('history:clear'),
   pickFolder: (opts) => ipcRenderer.invoke('dialog:pick', opts),
+  showItem: (p) => ipcRenderer.invoke('shell:showItem', p),
   reveal: (p) => ipcRenderer.invoke('shell:reveal', p),
   check: (profile, dryRun) => ipcRenderer.invoke('run:check', { profile, dryRun }),
   start: (profile, dryRun, runId) => ipcRenderer.invoke('run:start', { profile, dryRun, runId }),

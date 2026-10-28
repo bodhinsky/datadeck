@@ -9,7 +9,7 @@ jobs:
         with: { node-version: 22 }
       - run: brew install rsync
       - run: npm ci
-      - name: Unit + integration (Homebrew rsync)
+      - name: Unit + engine + integration (Homebrew rsync)
         run: PATH="$(brew --prefix)/bin:$PATH" npm test
       - name: End-to-end (real app)
         run: PATH="$(brew --prefix)/bin:$PATH" npm run test:e2e
