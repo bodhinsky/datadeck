@@ -1,0 +1,48 @@
+{
+  "name": "syncdeck",
+  "version": "1.0.0",
+  "description": "Local data management cockpit: analyze folders, find duplicates and portability issues, restructure safely with verified copies and undo, and sync with rsync.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/unit/*.test.js\" \"test/engine/*.test.js\" \"test/integration/*.test.js\"",
+    "test:unit": "node --test \"test/unit/*.test.js\"",
+    "test:integration": "node --test \"test/integration/*.test.js\"",
+    "test:e2e": "node --test --test-concurrency=1 \"test/e2e/*.test.js\"",
+    "test:all": "npm test && npm run test:e2e",
+    "screenshots": "node scripts/screenshots.js",
+    "dist": "electron-builder --mac",
+    "test:engine": "node --test \"test/engine/*.test.js\""
+  },
+  "author": "Tim",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^38.8.6",
+    "electron-builder": "^26.18.0",
+    "playwright": "^1.63.0"
+  },
+  "productName": "DataDeck",
+  "build": {
+    "appId": "de.tim.datadeck",
+    "productName": "DataDeck",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    }
+  }
+}

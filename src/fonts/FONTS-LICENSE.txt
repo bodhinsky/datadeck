@@ -1,0 +1,5 @@
+Bundled fonts, all under the SIL Open Font License 1.1:
+- Inter (Rasmus Andersson)
+- JetBrains Mono (JetBrains)
+- Silkscreen (Jason Kottke)
+Source: Fontsource packages (@fontsource/inter, @fontsource/jetbrains-mono, @fontsource/silkscreen).

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>DataDeck</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark"></span><span class="brand-name">DATADECK</span></div>
+    <div class="crumbs"><b id="crumbPage">Overview</b><span id="crumbSource"></span><span class="path" id="crumbPath"></span></div>
+    <div class="spacer"></div>
+    <button class="wspill" id="wsPill" hidden title="Pending decisions. Nothing is written to disk until you export a reviewed state."></button>
+    <div class="jobbar" id="jobbar" hidden>
+      <div class="jl"><div class="jt" id="jobTitle"></div><div class="js" id="jobSub"></div><div class="progress" id="jobProg"><i></i></div></div>
+      <button class="btn sm" id="jobCancel">Cancel</button>
+    </div>
+    <div class="seg" id="themeSeg" title="Appearance"><button data-theme-set="system">Auto</button><button data-theme-set="light">Light</button><button data-theme-set="dark">Dark</button></div>
+  </header>
+
+  <aside class="sidebar">
+    <div>
+      <div class="nav-h">Sources<span class="rule"></span><button id="btnAddSource" title="Add a folder to analyze">+</button></div>
+      <nav class="nav" id="sourceList"></nav>
+    </div>
+    <div>
+      <div class="nav-h">Analyze<span class="rule"></span></div>
+      <nav class="nav">
+        <a data-page="overview"><span class="ico">▦</span>Overview</a>
+        <a data-page="explorer"><span class="ico">☰</span>Explorer</a>
+        <a data-page="dupes"><span class="ico">⧉</span>Duplicates<span class="count" id="navDupes"></span></a>
+        <a data-page="issues"><span class="ico">⚠</span>Issues<span class="count" id="navIssues"></span></a>
+      </nav>
+    </div>
+    <div>
+      <div class="nav-h">Organize<span class="rule"></span></div>
+      <nav class="nav">
+        <a data-page="restructure"><span class="ico">⇄</span>Layout</a>
+        <a data-page="changes"><span class="ico">±</span>Changes<span class="count" id="navChanges"></span></a>
+        <a data-page="plans"><span class="ico">≡</span>Exports &amp; undo</a>
+      </nav>
+    </div>
+    <div>
+      <div class="nav-h">Transfer<span class="rule"></span></div>
+      <nav class="nav">
+        <a data-page="sync"><span class="ico">↻</span>Sync (rsync)</a>
+      </nav>
+    </div>
+    <div>
+      <div class="nav-h">System<span class="rule"></span></div>
+      <nav class="nav">
+        <a data-page="jobs"><span class="ico">◷</span>Jobs</a>
+        <a data-page="settings"><span class="ico">⚙</span>Settings</a>
+      </nav>
+    </div>
+    <div class="side-foot" id="sideFoot"></div>
+  </aside>
+
+  <main class="main" id="main">
+    <section class="page" id="page-overview"></section>
+    <section class="page fill" id="page-explorer"></section>
+    <section class="page" id="page-dupes"></section>
+    <section class="page fill" id="page-issues"></section>
+    <section class="page" id="page-restructure"></section>
+    <section class="page" id="page-changes"></section>
+    <section class="page" id="page-plans"></section>
+    <section class="page" id="page-sync"></section>
+    <section class="page" id="page-jobs"></section>
+    <section class="page" id="page-settings"></section>
+  </main>
+</div>
+<script src="lib.js"></script>
+<script src="vtable.js"></script>
+<script src="details.js"></script>
+<script src="views/overview.js"></script>
+<script src="views/explorer.js"></script>
+<script src="views/dupes.js"></script>
+<script src="views/issues.js"></script>
+<script src="views/restructure.js"></script>
+<script src="views/changes.js"></script>
+<script src="views/plans.js"></script>
+<script src="views/sync.js"></script>
+<script src="views/system.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
