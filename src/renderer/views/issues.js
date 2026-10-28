@@ -22,7 +22,10 @@
 
   function render(o) {
     const head = DD.pageHead('Issues', 'Names, paths and files that cause trouble on Windows, USB drives, Linux, or when copied. Restructuring can fix most of them automatically.', [
-      h('button', { class: 'btn', text: 'Fix names in a copy…', title: 'Copy everything with names made safe for the target file system', onclick: () => DD.go('restructure', { filter: {}, template: '{path}/{name}' }) }),
+      h('button', { class: 'btn', text: 'Stage name fixes', title: 'Record cleaned names for the target file system; review them under Changes', onclick: async () => {
+        await DD.stage('sanitize', { filter: { anyIssue: true } }, { targetFs: (S.ws && S.ws.targetFs) || 'exfat' });
+        DD.go('changes', { tab: 'staged' });
+      } }),
     ]);
     if (!o.issues.length) { el.replaceChildren(head, DD.emptyState('No issues', 'Every name and path here works on macOS, Windows, Linux and USB drives.')); return; }
     const list = h('table', { class: 'stat' },

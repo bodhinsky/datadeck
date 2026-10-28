@@ -14,6 +14,7 @@ const { Executor, undoPlan } = require('./executor');
 const { TOKENS, PRESETS, checkTemplate, renderTarget } = require('./template');
 const { TARGETS } = require('./compat');
 const { CATEGORIES } = require('./categories');
+const ws = require('./changes');
 
 const str = (v, name, max = 4096) => {
   if (typeof v !== 'string' || !v || v.length > max || /\0/.test(v)) throw new Error(`Invalid ${name}`);
@@ -116,7 +117,11 @@ class Engine {
     const id = int(sourceId, 'sourceId');
     const src = this.db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
     if (!src) throw new Error('Unknown source');
-    return this.startJob('scan', `Scanning ${src.label}`, (j) => scanSource(this.db, id, { ...j, oneFileSystem: !!oneFileSystem }), { sourceId: id });
+    return this.startJob('scan', `Scanning ${src.label}`, async (j) => {
+      const r = await scanSource(this.db, id, { ...j, oneFileSystem: !!oneFileSystem });
+      ws.evaluate(this.db, id); // the planned state follows the new catalog
+      return r;
+    }, { sourceId: id });
   }
 
   overview({ sourceId }) { return overview(this.db, int(sourceId, 'sourceId')); }
@@ -133,7 +138,7 @@ class Engine {
     const id = int(sourceId, 'sourceId');
     const src = this.db.prepare('SELECT label FROM sources WHERE id = ?').get(id);
     if (!src) throw new Error('Unknown source');
-    return this.startJob('dupes', `Finding duplicates in ${src.label}`, (j) => findDuplicates(this.db, id, j), { sourceId: id });
+    return this.startJob('dupes', `Finding duplicates in ${src.label}`, async (j) => { const r = await findDuplicates(this.db, id, j); ws.evaluate(this.db, id); return r; }, { sourceId: id });
   }
 
   dupesGroups({ sourceId, offset, limit }) { return dupeGroups(this.db, int(sourceId, 'sourceId'), { offset, limit }); }
@@ -171,12 +176,90 @@ class Engine {
     const plan = getPlan(this.db, id);
     if (!plan) throw new Error('Unknown plan');
     if (plan.status === 'invalid') throw new Error('This plan has errors; fix them and create a new plan.');
-    return this.startJob('execute', `${plan.spec.mode === 'move' ? 'Moving' : 'Copying'} files (plan #${id})`, (j) => new Executor(this.db, id, j).run(), { sourceId: plan.source_id, planId: id });
+    if (plan.spec.fromWorkspace) {
+      const check = ws.exportCheck(this.db, plan.source_id);
+      if (check.version !== plan.spec.wsVersion) throw new Error('The planned state changed after this export plan was built. Build the export again so it matches what you reviewed.');
+      const blocking = check.items.filter((i) => !i.ok && i.key !== 'checked');
+      if (blocking.length) throw new Error(`Export blocked: ${blocking.map((i) => i.label).join('; ')}.`);
+    }
+    return this.startJob('execute', `${plan.spec.mode === 'move' ? 'Moving' : 'Copying'} files (plan #${id})`, async (j) => {
+      const r = await new Executor(this.db, id, j).run();
+      if (plan.spec.fromWorkspace && r.status === 'done') this.markExported(plan);
+      return r;
+    }, { sourceId: plan.source_id, planId: id });
+  }
+
+  // After a complete export the reviewed commits are recorded with the plan.
+  // An in-place move makes them real on disk, so they stop shaping the
+  // planned state; a copy elsewhere leaves the workspace as it was.
+  markExported(plan) {
+    const inPlace = plan.spec.mode === 'move' && path.resolve(plan.spec.targetRoot) === path.resolve(this.db.prepare('SELECT path FROM sources WHERE id = ?').get(plan.source_id).path);
+    const ids = plan.spec.commitIds || [];
+    const up = this.db.prepare('UPDATE commits SET status = ?, plan_id = ? WHERE id = ? AND status IN (\'reviewed\', \'exported\')');
+    tx(this.db, () => { for (const c of ids) up.run(inPlace ? 'applied' : 'exported', plan.id, c); });
+    if (!inPlace) ws.evaluate(this.db, plan.source_id);
   }
 
   planUndo({ planId }) {
     const id = int(planId, 'planId');
-    return this.startJob('undo', `Undoing plan #${id}`, (j) => undoPlan(this.db, id, j), { planId: id });
+    const plan = getPlan(this.db, id);
+    if (!plan) throw new Error('Unknown plan');
+    return this.startJob('undo', `Undoing plan #${id}`, async (j) => {
+      const r = await undoPlan(this.db, id, j);
+      // Undone exports return their commits to "reviewed", ready to export again.
+      if (plan.spec.fromWorkspace) {
+        this.db.prepare("UPDATE commits SET status = 'reviewed', plan_id = NULL WHERE plan_id = ?").run(id);
+        ws.evaluate(this.db, plan.source_id);
+      }
+      return r;
+    }, { sourceId: plan.source_id, planId: id });
+  }
+
+  // ── workspace: stage → commit → review → export ──
+  guardSource(id) {
+    if (this.busy && this.busy.sourceId === id && ['scan', 'execute', 'undo'].includes(this.busy.kind)) throw new Error(`Busy: ${this.busy.label}. Wait for it to finish.`);
+  }
+  wsSummary({ sourceId }) { return ws.summary(this.db, int(sourceId, 'sourceId')); }
+  wsList({ sourceId }) { return ws.listChanges(this.db, { sourceId: int(sourceId, 'sourceId') }); }
+  wsStage({ sourceId, op, params, selection, label }) {
+    const id = int(sourceId, 'sourceId');
+    this.guardSource(id);
+    return ws.stage(this.db, { sourceId: id, op: String(op), params: params || {}, selection: selection || {}, label });
+  }
+  wsUnstage({ sourceId, changeId }) { return ws.unstage(this.db, { sourceId: int(sourceId, 'sourceId'), changeId: int(changeId, 'changeId') }); }
+  wsDiscardStaged({ sourceId }) {
+    const id = int(sourceId, 'sourceId');
+    this.db.prepare('DELETE FROM changes WHERE source_id = ? AND commit_id IS NULL').run(id);
+    return ws.evaluate(this.db, id);
+  }
+  wsCommit({ sourceId, message }) { return ws.commit(this.db, { sourceId: int(sourceId, 'sourceId'), message }); }
+  wsReview({ sourceId, commitId, reviewed }) { return ws.review(this.db, { sourceId: int(sourceId, 'sourceId'), commitId: int(commitId, 'commitId'), reviewed: reviewed !== false }); }
+  wsRevert({ sourceId, commitId }) {
+    const id = int(sourceId, 'sourceId');
+    this.guardSource(id);
+    return ws.revert(this.db, { sourceId: id, commitId: int(commitId, 'commitId') });
+  }
+  wsTarget({ sourceId, targetFs }) { return ws.setTarget(this.db, { sourceId: int(sourceId, 'sourceId'), targetFs: String(targetFs) }); }
+  wsDiff(q) { return ws.diff(this.db, { ...q, sourceId: int(q.sourceId, 'sourceId') }); }
+  wsFolders({ sourceId, depth }) { return ws.plannedFolders(this.db, { sourceId: int(sourceId, 'sourceId'), depth }); }
+  wsCheck({ sourceId }) { return ws.exportCheck(this.db, int(sourceId, 'sourceId')); }
+  wsVerify({ sourceId }) {
+    const id = int(sourceId, 'sourceId');
+    const src = this.db.prepare('SELECT label FROM sources WHERE id = ?').get(id);
+    if (!src) throw new Error('Unknown source');
+    return this.startJob('verify', `Re-checking ${src.label} against the disk`, (j) => ws.verifySources(this.db, id, j), { sourceId: id });
+  }
+
+  // Builds the export plan from the reviewed planned state. Refuses unless
+  // every check passes; the plan remembers the state version it was built from.
+  wsExport({ sourceId, targetRoot, mode = 'copy', conflict = 'skip', finalReview }) {
+    const id = int(sourceId, 'sourceId');
+    this.guardSource(id);
+    if (finalReview !== true) throw new Error('Confirm that you reviewed the final state.');
+    const check = ws.exportCheck(this.db, id);
+    if (!check.ok) return { ok: false, errors: check.items.filter((i) => !i.ok).map((i) => `${i.label}. ${i.fix}`), warnings: check.warnings };
+    const commitIds = this.db.prepare(`SELECT id FROM commits WHERE source_id = ? AND status IN ${ws.ACTIVE}`).all(id).map((r) => r.id);
+    return createPlan(this.db, { sourceId: id, fromWorkspace: true, wsVersion: check.version, commitIds, targetRoot, mode, conflict, targetFs: check.targetFs, template: '(planned state)', filter: {}, skipJunk: false, dedupe: false });
   }
 
   jobCancel({ jobId }) {
@@ -225,8 +308,10 @@ const API = {
   meta: 'meta', 'sources.list': 'sourcesList', 'sources.add': 'sourcesAdd', 'sources.rename': 'sourcesRename', 'sources.remove': 'sourcesRemove',
   'scan.start': 'scanStart', overview: 'overview', 'entries.query': 'entriesQuery', 'entries.group': 'entriesGroup',
   'dupes.find': 'dupesFind', 'dupes.groups': 'dupesGroups',
-  'template.preview': 'templatePreview', 'plan.create': 'planCreate', 'plan.get': 'planGet', 'plan.ops': 'planOps', 'plan.list': 'planList', 'plan.delete': 'planDelete',
+  'template.preview': 'templatePreview', 'plan.get': 'planGet', 'plan.ops': 'planOps', 'plan.list': 'planList', 'plan.delete': 'planDelete',
   'plan.execute': 'planExecute', 'plan.undo': 'planUndo',
+  'ws.summary': 'wsSummary', 'ws.list': 'wsList', 'ws.stage': 'wsStage', 'ws.unstage': 'wsUnstage', 'ws.discard': 'wsDiscardStaged', 'ws.commit': 'wsCommit',
+  'ws.review': 'wsReview', 'ws.revert': 'wsRevert', 'ws.target': 'wsTarget', 'ws.diff': 'wsDiff', 'ws.folders': 'wsFolders', 'ws.check': 'wsCheck', 'ws.verify': 'wsVerify', 'ws.export': 'wsExport',
   'job.cancel': 'jobCancel', 'jobs.list': 'jobsList', 'export.csv': 'exportCsv',
 };
 

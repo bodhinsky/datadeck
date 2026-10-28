@@ -3,7 +3,7 @@
 // always bound as parameters; column names come from a fixed whitelist.
 
 const SORTS = {
-  path: 'e.rel_path', name: 'e.name', size: 'e.size', mtime: 'e.mtime', ext: 'e.ext',
+  planned: 'COALESCE(v.vpath, e.rel_path)', path: 'e.rel_path', name: 'e.name', size: 'e.size', mtime: 'e.mtime', ext: 'e.ext',
   category: 'e.category', depth: 'e.depth', kind: 'e.kind', tree: 'e.tree_bytes',
 };
 const KINDS = new Set(['file', 'dir', 'symlink', 'other']);
@@ -53,6 +53,13 @@ function buildWhere(filter) {
     w.push(`e.kind = 'file' AND e.hash IS NOT NULL AND EXISTS (SELECT 1 FROM entries d WHERE d.source_id = e.source_id
       AND d.hash = e.hash AND d.size = e.size AND d.id <> e.id)`);
   }
+  // The planned state (see changes.js): 1 moved, 2 renamed, 4 excluded, 8/32 collisions, 16 bad name, 64 changed on disk.
+  const VS = { changed: 7, excluded: 4, kept: -4, problems: 8 | 16 | 32 | 64 };
+  if (VS[filter.planned] !== undefined) {
+    const m = VS[filter.planned];
+    w.push(m < 0 ? 'COALESCE((SELECT v.flags FROM vstate v WHERE v.entry_id = e.id), 0) & ? = 0' : 'COALESCE((SELECT v.flags FROM vstate v WHERE v.entry_id = e.id), 0) & ? != 0');
+    p.push(Math.abs(m));
+  }
   const ids = toArr(filter.ids).map(Number).filter(Number.isInteger);
   if (ids.length) { w.push(`e.id IN (${ids.map(() => '?').join(',')})`); p.push(...ids); }
   return { where: w.join(' AND '), params: p };
@@ -66,8 +73,9 @@ function queryEntries(db, filter, opts = {}) {
   const offset = Math.max(0, Number(opts.offset) || 0);
   const rows = db.prepare(`SELECT e.id, e.rel_path, e.name, e.ext, e.kind, e.category, e.size, e.tree_bytes, e.tree_files,
       e.mtime, e.depth, e.hash, e.error, e.link_target, e.nlink,
-      (SELECT GROUP_CONCAT(code) FROM issues i WHERE i.entry_id = e.id) AS issues
-    FROM entries e WHERE ${where} ORDER BY ${sortCol} ${dir}, e.id ${dir} LIMIT ? OFFSET ?`).all(...params, limit, offset);
+      (SELECT GROUP_CONCAT(code) FROM issues i WHERE i.entry_id = e.id) AS issues,
+      COALESCE(v.vpath, e.rel_path) AS vpath, COALESCE(v.flags, 0) AS vflags, c.label AS change_label
+    FROM entries e LEFT JOIN vstate v ON v.entry_id = e.id LEFT JOIN changes c ON c.id = v.change_id WHERE ${where} ORDER BY ${sortCol} ${dir}, e.id ${dir} LIMIT ? OFFSET ?`).all(...params, limit, offset);
   let totals = null;
   if (opts.totals !== false) {
     totals = db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(CASE WHEN e.kind = 'file' THEN e.size ELSE 0 END), 0) AS bytes,

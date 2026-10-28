@@ -1,14 +1,13 @@
 'use strict';
 /* global DD, deck */
-// Restructure: choose what (the Explorer filter), where, and the new layout;
-// build a plan; review every single operation; run it; undo if needed.
+// Layout: design a folder structure for a selection and stage it as a change.
+// Also shows export plans: every single operation, run, and undo.
 (function () {
   const { h, $ } = DD;
   const S = DD.state;
   let el;
   const R = (S.restructure = {
-    filter: {}, targetRoot: '', mode: 'copy', targetFs: 'apfs', conflict: 'rename', template: '{category}/{yyyy}/{name}',
-    skipJunk: true, dedupe: false, pruneEmpty: true, planId: null, opsFilter: '',
+    filter: {}, targetFs: 'apfs', template: '{category}/{yyyy}/{name}', planId: null, opsFilter: '',
   });
 
   const view = DD.views.restructure = {
@@ -27,7 +26,6 @@
     show(params = {}) {
       if (!DD.source()) { DD.go('overview'); return; }
       if (params.filter) { R.filter = { ...params.filter }; R.planId = null; }
-      if (params.dedupe !== undefined) R.dedupe = !!params.dedupe;
       if (params.template) R.template = params.template;
       if (params.planId) R.planId = params.planId;
       if (R.planId) showPlan(); else showForm();
@@ -40,19 +38,10 @@
   async function showForm() {
     const src = DD.source();
     const totals = (await DD.call('entries.query', { filter: { ...filterFull(), kinds: ['file'] }, limit: 1 })).totals;
-    const targetInput = h('input', { class: 'input mono', value: R.targetRoot, placeholder: '/Volumes/Archive/Sorted', spellcheck: 'false', oninput: (e) => { R.targetRoot = e.target.value.trim(); } });
     const tplInput = h('input', { class: 'input mono', value: R.template, spellcheck: 'false', oninput: (e) => { R.template = e.target.value; preview(); } });
     const previewBox = h('div', { class: 'preview-list' });
     const previewErr = h('div', { class: 'hint' });
 
-    const seg = (key, opts) => h('div', { class: 'seg' }, opts.map(([v, l]) => h('button', { text: l, class: R[key] === v ? 'on' : '', onclick: (e) => {
-      R[key] = v;
-      e.target.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.target));
-      if (key === 'targetFs') preview();
-      moveNote.hidden = R.mode !== 'move';
-    } })));
-    const check = (key, label, title) => h('label', { class: 'chk', title: title || '' }, h('input', { type: 'checkbox', checked: R[key], onchange: (e) => { R[key] = e.target.checked; } }), label);
-    const moveNote = h('div', { class: 'callout warn', hidden: R.mode !== 'move' }, h('span', { class: 'grow', text: 'Move removes each original only after its copy is written, fsynced and verified by SHA-256 (or, on the same disk, renames it without touching the data). Every move can be undone from Plans & undo.' }));
 
     async function preview() {
       const r = await DD.call('template.preview', { filter: filterFull(), template: R.template, targetFs: R.targetFs, limit: 8 }, { quiet: true }).catch((e) => ({ errors: [e.message], rows: [] }));
@@ -76,48 +65,34 @@
       preview();
     } })));
 
-    const build = h('button', { class: 'btn primary', text: 'Build plan', onclick: async () => {
-      build.disabled = true;
+    const stageBtn = h('button', { class: 'btn primary', id: 'btnStageLayout', text: 'Stage this layout', onclick: async () => {
+      stageBtn.disabled = true;
       try {
-        const r = await DD.call('plan.create', { sourceId: S.sourceId, filter: R.filter, template: R.template, targetRoot: R.targetRoot, mode: R.mode, conflict: R.conflict, targetFs: R.targetFs, skipJunk: R.skipJunk, dedupe: R.dedupe, pruneEmpty: R.pruneEmpty });
-        if (!r.planId) { DD.toast(r.errors.join(' '), true); return; }
-        R.planId = r.planId;
-        showPlan();
-      } finally { build.disabled = false; }
+        await DD.stage('layout', { filter: { ...R.filter, kinds: ['file'] } }, { template: R.template, targetFs: R.targetFs });
+        DD.go('changes', { tab: 'staged' });
+      } finally { stageBtn.disabled = false; }
     } });
+    const fsSelect = h('select', { class: 'input', style: { width: 'auto' }, onchange: (e) => { R.targetFs = e.target.value; preview(); } },
+      Object.entries(S.meta.targets).map(([k, l]) => h('option', { value: k, text: l, selected: R.targetFs === k })));
 
     el.replaceChildren(
-      DD.pageHead('Restructure', 'Copy or move files into a new layout. You review a full plan before anything happens.', []),
-      h('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))' } },
-        DD.card('1 · What', h('div', {},
-          h('p', { style: { margin: '0 0 6px' } }, h('b', { text: DD.describeFilter(R.filter) })),
-          h('p', { class: 'hint', style: { margin: '0 0 10px' }, text: `${DD.fmtNum(totals.count)} files · ${DD.fmtBytes(totals.bytes)} from ${src.label}` }),
-          h('div', { class: 'row' },
-            h('button', { class: 'btn', text: 'Refine in Explorer', onclick: () => DD.go('explorer', { filter: R.filter }) }),
-            h('button', { class: 'btn ghost', text: 'Use all files', onclick: () => { R.filter = {}; showForm(); } })))),
-        DD.card('2 · Where', h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
-          h('label', { class: 'field' }, h('span', { text: 'Target folder' }), h('div', { class: 'row' }, targetInput,
-            h('button', { class: 'btn', text: 'Browse…', onclick: async () => { const d = await deck.pickFolder({ title: 'Choose target folder' }); if (d) { R.targetRoot = d; targetInput.value = d; } } }),
-            h('button', { class: 'btn ghost', text: 'In place', title: 'Reorganize inside the source folder itself (move mode)', onclick: () => { R.targetRoot = src.path; targetInput.value = src.path; R.mode = 'move'; showFormKeep(); } }))),
-          h('div', { class: 'row', style: { flexWrap: 'wrap', gap: '16px' } },
-            h('label', { class: 'field' }, h('span', { text: 'Mode' }), seg('mode', [['copy', 'Copy'], ['move', 'Move']])),
-            h('label', { class: 'field' }, h('span', { text: 'If a name is taken' }), seg('conflict', [['rename', 'Keep both'], ['skip', 'Skip']])),
-            h('label', { class: 'field' }, h('span', { text: 'Target file system' }), h('select', { class: 'input', onchange: (e) => { R.targetFs = e.target.value; preview(); } },
-              Object.entries(S.meta.targets).map(([k, l]) => h('option', { value: k, text: l, selected: R.targetFs === k }))))),
-          h('div', { class: 'row', style: { flexWrap: 'wrap', gap: '16px' } },
-            check('skipJunk', 'Skip system clutter', '.DS_Store, Thumbs.db, ._ files'),
-            check('dedupe', 'One copy per duplicate group', 'Needs a duplicate check first'),
-            check('pruneEmpty', 'Remove emptied folders (move)')),
-          moveNote)),
-      ),
+      DD.pageHead('Layout', 'Design a new folder structure for a selection. Staging it records the decision only; review and export happen under Changes.', []),
+      DD.card('1 · Which files', h('div', {},
+        h('p', { style: { margin: '0 0 6px' } }, h('b', { text: DD.describeFilter(R.filter) })),
+        h('p', { class: 'hint', style: { margin: '0 0 10px' }, text: `${DD.fmtNum(totals.count)} files · ${DD.fmtBytes(totals.bytes)} from ${src.label}` }),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', text: 'Refine in Explorer', onclick: () => DD.go('explorer', { filter: R.filter }) }),
+          h('button', { class: 'btn ghost', text: 'Use all files', onclick: () => { R.filter = {}; showForm(); } })))),
       h('div', { style: { height: '16px' } }),
-      DD.card('3 · New structure', h('div', {},
+      DD.card('2 · New structure', h('div', {},
         presets,
         h('label', { class: 'field', style: { marginTop: '12px' } }, h('span', { text: 'Path template' }), tplInput),
-        previewErr, tokens, previewBox,
-        h('p', { class: 'hint', style: { margin: '10px 0 0' }, text: 'Every folder and file name is cleaned for the chosen file system. Name clashes inside the plan are resolved before anything runs.' })),
+        previewErr, tokens,
+        h('div', { class: 'row', style: { margin: '10px 0 6px' } }, h('span', { class: 'hint', text: 'Clean names for' }), fsSelect),
+        previewBox,
+        h('p', { class: 'hint', style: { margin: '10px 0 0' }, text: 'Layouts stack with other changes: you can still exclude, rename or move single files afterwards. Collisions are shown under Changes before anything can be exported.' })),
         { hint: 'live preview of the first files' }),
-      h('div', { class: 'row', style: { marginTop: '16px', justifyContent: 'flex-end' } }, build));
+      h('div', { class: 'row', style: { marginTop: '16px', justifyContent: 'flex-end' } }, stageBtn));
     preview();
   }
   function showFormKeep() { showForm(); }
@@ -135,7 +110,7 @@
     const runnable = ['draft', 'cancelled', 'done-with-errors', 'interrupted', 'failed'].includes(plan.status) && (n('pending') + n('failed')) > 0;
 
     const actions = [
-      h('button', { class: 'btn ghost', text: '← New plan', onclick: () => { R.planId = null; showForm(); } }),
+      h('button', { class: 'btn ghost', text: '← Changes', onclick: () => { R.planId = null; DD.go('changes', { tab: 'export' }); } }),
       h('button', { class: 'btn', text: 'Export plan CSV…', onclick: async () => {
         const file = await deck.saveFile({ title: 'Export plan', defaultPath: `plan-${plan.id}.csv` });
         if (file) { const r = await DD.call('export.csv', { file, planId: plan.id }); DD.toast(`Exported ${r.rows} operations`); }
@@ -174,7 +149,7 @@
       },
     });
     el.replaceChildren(
-      DD.pageHead(`Plan #${plan.id}`, `${plan.spec.mode === 'move' ? 'Move' : 'Copy'} ${DD.describeFilter(plan.spec.filter || {})} → ${root} · template ${plan.spec.template}`, actions),
+      DD.pageHead(`${plan.spec.fromWorkspace ? 'Export plan' : 'Plan'} #${plan.id}`, `${plan.spec.mode === 'move' ? 'Move' : 'Copy'} ${DD.describeFilter(plan.spec.filter || {})} → ${root} · template ${plan.spec.template}`, actions),
       h('div', { class: 'row', style: { marginBottom: '10px' } }, statusTag, running ? h('span', { class: 'hint', text: 'Running — progress is shown at the top.' }) : null),
       kpis, ...notes,
       h('div', { class: 'row', style: { margin: '6px 0 10px' } }, h('span', { class: 'hint', text: 'Operations' }), opsSeg),

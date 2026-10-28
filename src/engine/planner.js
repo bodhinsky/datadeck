@@ -7,7 +7,7 @@ const path = require('path');
 const { tx } = require('./db');
 const { buildWhere } = require('./query');
 const { checkTemplate, renderTarget, safeJoin, numbered } = require('./template');
-const { TARGETS, isJunk } = require('./compat');
+const { TARGETS, isJunk, sanitizeName } = require('./compat');
 
 const MODES = new Set(['copy', 'move']);
 const CONFLICTS = new Set(['rename', 'skip']);
@@ -47,7 +47,7 @@ function validateSpec(db, spec) {
   if (!MODES.has(spec.mode)) errors.push('Mode must be copy or move.');
   if (!CONFLICTS.has(spec.conflict)) errors.push('Conflict handling must be rename or skip.');
   if (!TARGETS[spec.targetFs]) errors.push('Unknown target file system.');
-  errors.push(...checkTemplate(spec.template));
+  if (!spec.fromWorkspace) errors.push(...checkTemplate(spec.template));
   const root = String(spec.targetRoot || '').trim();
   if (!root) errors.push('Choose a target folder.');
   else if (!path.isAbsolute(root)) errors.push('Target folder must be an absolute path.');
@@ -71,7 +71,12 @@ function createPlan(db, spec) {
   const root = path.resolve(String(spec.targetRoot).trim());
   const filter = { ...(spec.filter || {}), sourceId: src.id };
   const { where, params } = buildWhere(filter);
-  const rows = db.prepare(`SELECT e.id, e.rel_path, e.parent, e.name, e.ext, e.kind, e.category, e.size, e.mtime, e.hash, e.error
+  // From the workspace: exactly the reviewed planned state, files only.
+  const rows = spec.fromWorkspace
+    ? db.prepare(`SELECT e.id, e.rel_path, e.parent, e.name, e.ext, e.kind, e.category, e.size, e.mtime, e.hash, e.error, v.vpath
+        FROM entries e LEFT JOIN vstate v ON v.entry_id = e.id
+        WHERE e.source_id = ? AND e.kind = 'file' AND (COALESCE(v.flags, 0) & 4) = 0 ORDER BY COALESCE(v.vpath, e.rel_path)`).all(src.id)
+    : db.prepare(`SELECT e.id, e.rel_path, e.parent, e.name, e.ext, e.kind, e.category, e.size, e.mtime, e.hash, e.error
     FROM entries e WHERE ${where} AND e.kind = 'file' ORDER BY e.rel_path`).all(...params);
 
   const ops = [];
@@ -83,9 +88,15 @@ function createPlan(db, spec) {
   for (const e of rows) {
     if (spec.skipJunk && isJunk(e.name)) { counts.junk++; continue; }
     const srcAbs = path.join(src.path, e.rel_path);
-    let rel = renderTarget(spec.template, e, { target: spec.targetFs, source: src.label });
-    const plainName = e.name;
-    if (rel.split('/').pop() !== plainName && !spec.template.includes('{stem}')) counts.sanitized++;
+    let rel;
+    if (spec.fromWorkspace) {
+      const planned = e.vpath || e.rel_path;
+      rel = planned.split('/').map((seg) => sanitizeName(seg, spec.targetFs)).join('/');
+      if (rel !== planned) counts.sanitized++;
+    } else {
+      rel = renderTarget(spec.template, e, { target: spec.targetFs, source: src.label });
+      if (rel.split('/').pop() !== e.name && !spec.template.includes('{stem}')) counts.sanitized++;
+    }
     let status = 'pending';
     let note = null;
 
@@ -143,6 +154,7 @@ function createPlan(db, spec) {
   if (free !== null && needBytes > free * 0.98) errors.push(`Not enough space on the target: need ${needBytes} bytes, ${free} free.`);
   if (!ops.length) warnings.push('The filter matches no files.');
   if (counts.existing) warnings.push(`${counts.existing} target file(s) already exist; identical ones are skipped after a checksum check.`);
+  if (spec.fromWorkspace && counts.sanitized) warnings.push(`${counts.sanitized} path(s) were cleaned for ${TARGETS[spec.targetFs].label}. Check the “To” column.`);
   if (counts.unreadable) warnings.push(`${counts.unreadable} file(s) were unreadable during the scan and are skipped.`);
 
   const summary = { ...counts, ops: ops.length, needBytes, freeBytes: free, sameDevice, warnings, errors, root, mode: spec.mode };

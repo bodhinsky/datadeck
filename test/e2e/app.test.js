@@ -41,9 +41,14 @@ async function waitPlan(win, re, ms = 60000) {
   }
 }
 
-test('data flow: add source, analyze, filter, plan, verified copy, undo', { timeout: 180000 }, async () => {
+const filesIn = (dir) => Object.entries(snapshot(dir)).filter(([, v]) => v !== 'dir').map(([k]) => k).sort();
+async function waitWs(win, re, ms = 15000) {
+  await win.waitForFunction((src) => new RegExp(src).test(document.querySelector('#wsPill').textContent), re.source, { timeout: ms });
+}
+
+test('review-first flow: stage decisions, commit, review, re-check, export, undo', { timeout: 240000 }, async () => {
   const src = path.join(work, 'library');
-  const out = path.join(work, 'sorted');
+  const out = path.join(work, 'clean');
   const jpg = randomBytes(200000, 1);
   write(src, 'Trips/2024/IMG_0001.jpg', jpg);
   write(src, 'Backup/IMG_0001 copy.jpg', jpg); // duplicate
@@ -66,61 +71,108 @@ test('data flow: add source, analyze, filter, plan, verified copy, undo', { time
 
     // Overview: statistics tables.
     await win.waitForSelector('#page-overview .kpis');
-    assert.match(await win.textContent('#page-overview'), /library/);
     assert.match(await win.textContent('#page-overview .kpis'), /FILES\s*8|Files\s*8/i);
-    assert.match(await win.textContent('#page-overview'), /image/);
 
-    // Duplicates: the content check finds the copy.
+    // Duplicates → stage "keep one of each". Nothing is deleted.
     await nav(win, 'dupes');
     await win.click('#page-dupes >> text=Find duplicates');
-    await win.waitForFunction(() => /Export without duplicates/.test(document.querySelector('#page-dupes').textContent), null, { timeout: 30000 });
+    await win.waitForSelector('#page-dupes >> text=Keep one of each…', { timeout: 30000 });
     assert.match(await win.textContent('#page-dupes'), /IMG_0001 copy\.jpg/);
+    await win.click('#page-dupes >> text=Keep one of each…');
+    await modalOk(win);
+    await waitWs(win, /1 staged/);
 
-    // Issues: names that break on Windows/exFAT are flagged.
+    // Issues are flagged.
     await nav(win, 'issues');
-    await win.waitForFunction(() => /Bad:name\?\.txt/.test(document.querySelector('#page-issues').textContent) || document.querySelector('#page-issues .vt-r'), null, { timeout: 10000 });
+    await win.waitForSelector('#page-issues .vt-r', { timeout: 10000 });
     assert.ok(Number(await win.textContent('#navIssues')) > 0);
 
-    // Explorer: hostile names are text, never HTML.
+    // Explorer: hostile names stay text. Select all *.txt and exclude them.
     await nav(win, 'explorer');
     await win.waitForSelector('#page-explorer .vt-r');
     assert.equal(await win.locator('#page-explorer .vt-b img').count(), 0);
     assert.notEqual(await win.title(), '1');
-    await win.fill('#page-explorer input[placeholder="*.jpg, IMG_*"]', '*.jpg');
+    const name = '#page-explorer input[placeholder="*.jpg, IMG_*"]';
+    await win.fill(name, '*.txt');
     await win.waitForFunction(() => /^3 entries/.test(document.querySelector('#page-explorer .statusline').textContent.trim()), null, { timeout: 5000 });
+    await win.click('.selbar >> text=Select all 3 matching');
+    await win.click('.selbar >> text=Exclude');
+    await waitWs(win, /2 staged/);
+    await win.waitForSelector('#page-explorer .vt-r.st-excl');
+    assert.equal(await win.locator('#page-explorer .vt-r.st-excl').count(), 3, 'excluded rows are marked');
 
-    // Restructure only those, by type then year, into a new folder.
-    await win.click('#page-explorer >> text=Restructure these…');
+    // Rename one file.
+    await win.fill(name, 'report.pdf');
+    await win.waitForFunction(() => /^1 entries/.test(document.querySelector('#page-explorer .statusline').textContent.trim()), null, { timeout: 5000 });
+    await win.click('#page-explorer .vt-r .rowchk');
+    await win.click('.selbar >> text=Rename…');
+    await win.fill('.modal input.input', 'Annual report.pdf');
+    await modalOk(win);
+    await waitWs(win, /3 staged/);
+    await win.waitForSelector('#page-explorer .vt-r.st-chg >> text=docs/Annual report.pdf');
+
+    // Lay out the photos by type.
+    await win.fill(name, '*.jpg');
+    await win.waitForFunction(() => /^3 entries/.test(document.querySelector('#page-explorer .statusline').textContent.trim()), null, { timeout: 5000 });
+    await win.click('#page-explorer >> text=Lay out these…');
     await win.waitForSelector('#page-restructure >> text=3 files');
-    await win.fill('#page-restructure input[placeholder="/Volumes/Archive/Sorted"]', out);
-    await win.click('#page-restructure >> text=By type');
+    await win.click('#page-restructure .chip >> text=By type');
     await win.waitForFunction(() => /image\//.test(document.querySelector('#page-restructure .preview-list').textContent));
-    await win.click('#page-restructure >> text=Build plan');
-    await win.waitForSelector('#page-restructure >> text=Plan #1');
-    assert.equal(fs.existsSync(out), false, 'building a plan writes nothing');
+    await win.click('#btnStageLayout');
+    await waitWs(win, /4 staged/);
+
+    // Staging wrote nothing.
+    assert.deepEqual(snapshot(src), before);
+    assert.equal(fs.existsSync(out), false);
+
+    // Commit, then review the commit's before/after table.
+    await win.waitForSelector('#page-changes #commitMsg');
+    assert.equal(await win.locator('#page-changes table.stat tbody tr').count(), 4);
+    await win.fill('#commitMsg', 'Clean up library');
+    await win.click('#page-changes >> text=Commit 4 changes');
+    await win.waitForSelector('#page-changes .reviewbar >> text=Commit #1: Clean up library');
+    await waitWs(win, /1 to review/);
+    await win.click('#page-changes [data-kind="moved"]');
+    await win.waitForSelector('#page-changes .vt-r >> text=image/jpg/IMG_0002.jpg');
+    assert.equal(await win.isDisabled('#btnMarkReviewed'), true, 'review needs an explicit acknowledgement');
+    await win.check('#reviewAck');
+    await win.click('#btnMarkReviewed');
+
+    // Export gate: the sources must be re-checked first.
+    await win.waitForSelector('#exportChecks');
+    assert.equal(await win.locator('#exportChecks .ci.no[data-check="checked"]').count(), 1);
+    await win.fill('#exportTarget', out);
+    await win.check('#finalAck');
+    assert.equal(await win.isDisabled('#btnBuildExport'), true);
+    await win.click('#btnRecheck');
+    await win.waitForSelector('#exportChecks .ci.ok[data-check="checked"]', { timeout: 30000 });
+    assert.equal(await win.locator('#exportChecks .ci.no').count(), 0);
+    await win.fill('#exportTarget', out);
+    await win.check('#finalAck');
+    await win.click('#btnBuildExport');
+
+    // The export plan lists every operation; building it writes nothing.
+    await win.waitForSelector('#page-restructure >> text=Export plan #1');
+    assert.equal(fs.existsSync(out), false);
     await win.click('#page-restructure >> text=Run plan (copy)');
     await modalOk(win);
     assert.equal(await waitPlan(win, /^done/), 'done');
-    const got = snapshot(out);
-    assert.deepEqual(Object.keys(got).sort(), ['image', 'image/jpg', 'image/jpg/IMG_0001 copy.jpg', 'image/jpg/IMG_0001.jpg', 'image/jpg/IMG_0002.jpg'].sort());
+    assert.deepEqual(filesIn(out), ['.DS_Store', 'docs/Annual report.pdf', 'image/jpg/IMG_0001.jpg', 'image/jpg/IMG_0002.jpg']);
     assert.equal(fs.readFileSync(path.join(out, 'image/jpg/IMG_0001.jpg')).equals(jpg), true);
-    assert.deepEqual(snapshot(src), before, 'copy never touches the source');
-    await win.waitForSelector('#page-restructure >> text=Undo…');
+    assert.deepEqual(snapshot(src), before, 'export never touches the source');
 
-    // Undo removes exactly what the plan wrote.
+    // Undo removes exactly what the export wrote; the commit is ready again.
     await win.click('#page-restructure >> text=Undo…');
     await modalOk(win);
     await waitPlan(win, /^undone/);
-    assert.deepEqual(snapshot(out), {});
+    assert.deepEqual(filesIn(out), []);
     assert.deepEqual(snapshot(src), before);
-
-    // Plans list keeps the journal.
     await nav(win, 'plans');
     await win.waitForSelector('#page-plans >> text=#1');
     assert.match(await win.textContent('#page-plans'), /undone/);
-    await nav(win, 'jobs');
-    await win.waitForSelector('#page-jobs table');
-    assert.match(await win.textContent('#page-jobs'), /done/);
+    await nav(win, 'changes');
+    await win.click('#page-changes [data-tab="commits"]');
+    await win.waitForSelector('#page-changes >> text=reviewed');
     assert.deepEqual(errors, []);
   } finally {
     await app.close();

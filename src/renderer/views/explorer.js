@@ -17,6 +17,11 @@
 
   const GROUP_DIMS = [['', 'None'], ['category', 'Type'], ['ext', 'Extension'], ['year', 'Year'], ['month', 'Month'], ['top', 'Top folder'], ['parent', 'Folder']];
   const KIND_OPTS = [['', 'Everything'], ['file', 'Files'], ['dir', 'Folders'], ['symlink', 'Links']];
+  const PLANNED_OPTS = [['', 'Any'], ['changed', 'Changed'], ['excluded', 'Excluded'], ['kept', 'Kept'], ['problems', 'Problems']];
+  // Selection: explicit rows, or "everything matching the filter".
+  const sel = { ids: new Map(), all: false };
+  let selBar;
+  let matching = 0;
 
   function dateVal(ms) { return ms ? new Date(ms).toISOString().slice(0, 10) : ''; }
 
@@ -37,6 +42,7 @@
     if (f.issue) parts.push(`issue: ${f.issue}`);
     if (f.anyIssue) parts.push('with issues');
     if (f.dupes) parts.push('duplicates');
+    if (f.planned) parts.push(`planned: ${f.planned}`);
     return parts.length ? parts.join(' · ') : 'All entries';
   }
   DD.describeFilter = describe;
@@ -46,6 +52,8 @@
       el = $('page-explorer');
       build();
       DD.bus.addEventListener('job-done', (e) => { if (S.page === 'explorer' && e.detail.sourceId === S.sourceId) refresh(); });
+      DD.bus.addEventListener('ws', () => { if (S.page === 'explorer') table.reload({ keepScroll: true }); });
+      DD.bus.addEventListener('source', () => clearSel());
     },
     show(params = {}) {
       if (params.filter) { S.filter = { ...params.filter }; fillInputs(); }
@@ -78,6 +86,7 @@
       field('Show', inputs.kind = h('select', { class: 'input', onchange: readInputs }, KIND_OPTS.map(([v, l]) => h('option', { value: v, text: l })))),
       h('label', { class: 'chk' }, inputs.anyIssue = h('input', { type: 'checkbox', onchange: readInputs }), 'Issues only'),
       h('label', { class: 'chk' }, inputs.dupes = h('input', { type: 'checkbox', onchange: readInputs }), 'Duplicates only'),
+      field('Planned', inputs.planned = h('select', { class: 'input', onchange: readInputs }, PLANNED_OPTS.map(([v, l]) => h('option', { value: v, text: l })))),
       h('button', { class: 'btn ghost', text: 'Reset', onclick: () => { S.filter = {}; fillInputs(); refresh(); } }));
     inputs.cats = h('div', { class: 'catchips' });
 
@@ -92,24 +101,26 @@
       h('div', {}, h('h1', { text: 'Explorer' }), subEl),
       h('div', { class: 'actions' }, h('span', { class: 'hint', text: 'Group by' }), groupSeg,
         h('button', { class: 'btn', text: 'Export CSV…', onclick: () => view.exportCsv() }),
-        h('button', { class: 'btn primary', text: 'Restructure these…', onclick: () => DD.go('restructure', { filter: { ...S.filter } }) })));
+        h('button', { class: 'btn', text: 'Lay out these…', title: 'Stage a new folder layout for the current filter', onclick: () => DD.go('restructure', { filter: { ...S.filter } }) })));
+    selBar = h('div', { class: 'selbar' });
 
     table = new DD.VirtualTable({
       sort: 'path',
       emptyText: 'No entries match this filter.',
+      rowClass: (r) => `${DD.stateClass(r.vflags)}${sel.all || sel.ids.has(r.id) ? ' sel' : ''}`,
       columns: [
-        { label: 'Name', sort: 'name', width: 'minmax(140px, 2fr)', render: (r) => h('span', { class: r.kind === 'dir' ? 'kind-dir' : '' }, r.kind === 'dir' ? '▸ ' : r.kind === 'symlink' ? '↪ ' : '', r.name), titleOf: (r) => r.rel_path },
+        { label: '', width: '22px', render: (r) => h('input', { type: 'checkbox', class: 'rowchk', checked: sel.all || sel.ids.has(r.id), disabled: sel.all, title: 'Select', onchange: (e) => toggle(r, e.target.checked) }) },
+        { label: 'Name', sort: 'name', width: 'minmax(120px, 2fr)', render: (r) => h('span', { class: r.kind === 'dir' ? 'kind-dir' : '' }, r.kind === 'dir' ? '▸ ' : r.kind === 'symlink' ? '↪ ' : '', r.name), titleOf: (r) => r.rel_path },
         { label: 'Folder', sort: 'path', width: 'minmax(60px, 1.5fr)', cls: 'dim', render: (r) => (r.rel_path.includes('/') ? r.rel_path.slice(0, r.rel_path.lastIndexOf('/')) : '/'), titleOf: (r) => r.rel_path },
-        { label: 'Type', sort: 'category', width: '84px', render: (r) => r.category },
-        { label: 'Ext', sort: 'ext', width: '64px', mono: true, render: (r) => r.ext },
-        { label: 'Size', sort: 'size', width: '88px', align: 'right', mono: true, render: (r) => (r.kind === 'dir' ? DD.fmtBytes(r.tree_bytes) : r.kind === 'file' ? DD.fmtBytes(r.size) : '') },
-        { label: 'Modified', sort: 'mtime', width: '96px', mono: true, render: (r) => DD.fmtDate(r.mtime) },
-        { label: 'Lvl', sort: 'depth', width: '40px', align: 'right', mono: true, render: (r) => r.depth },
-        { label: 'Flags', width: '96px', render: (r) => flags(r) },
+        { label: 'Planned path', sort: 'planned', width: 'minmax(80px, 1.6fr)', render: (r) => (r.vpath === r.rel_path ? (r.vflags & DD.VF.EXCLUDED ? '—' : h('span', { class: 'dim', text: 'unchanged' })) : h('span', { class: 'after', text: r.vpath })), titleOf: (r) => (r.change_label ? `${r.vpath}\n${r.change_label}` : r.vpath) },
+        { label: 'Type', sort: 'category', width: '76px', render: (r) => r.category },
+        { label: 'Size', sort: 'size', width: '76px', align: 'right', mono: true, render: (r) => (r.kind === 'dir' ? DD.fmtBytes(r.tree_bytes) : r.kind === 'file' ? DD.fmtBytes(r.size) : '') },
+        { label: 'Modified', sort: 'mtime', width: '88px', mono: true, render: (r) => DD.fmtDate(r.mtime) },
+        { label: 'State', width: '140px', render: (r) => h('span', { class: 'row', style: { gap: '4px' } }, DD.stateChips(r.vflags), flags(r)) },
       ],
       fetch: async (offset, limit, sort, dir) => {
         const r = await DD.call('entries.query', { filter: fullFilter(), sort, dir, offset, limit, totals: offset === 0 });
-        if (r.totals) renderStatus(r.totals);
+        if (r.totals) { matching = r.totals.count; renderStatus(r.totals); renderSel(); }
         return { rows: r.rows, total: r.totals ? r.totals.count : table.total };
       },
       onRowClick: (r) => details(r),
@@ -117,7 +128,8 @@
 
     groupBox = h('div', { class: 'card groups' }, h('div', { class: 'card-h' }, h('h3', { text: 'Groups' }), h('span', { class: 'hint', text: 'click to drill in' })), h('div', { class: 'card-b' }));
     statusEl = h('div', { class: 'statusline' });
-    el.replaceChildren(head, bar, inputs.cats, h('div', { class: 'split', id: 'exSplit' }, groupBox, h('div', { style: { display: 'flex', flexDirection: 'column', minHeight: '0' } }, table.el, statusEl)));
+    el.replaceChildren(head, bar, inputs.cats, h('div', { class: 'split', id: 'exSplit' }, groupBox, h('div', { style: { display: 'flex', flexDirection: 'column', minHeight: '0' } }, selBar, table.el, statusEl)));
+    renderSel();
   }
 
   function flags(r) {
@@ -165,6 +177,7 @@
     set('kinds', inputs.kind.value ? [inputs.kind.value] : null);
     set('anyIssue', inputs.anyIssue.checked || null);
     set('dupes', inputs.dupes.checked || null);
+    set('planned', inputs.planned.value || null);
     S.filter = f;
     refresh();
   }
@@ -183,11 +196,13 @@
     inputs.kind.value = f.kinds && f.kinds.length === 1 ? f.kinds[0] : '';
     inputs.anyIssue.checked = !!f.anyIssue;
     inputs.dupes.checked = !!f.dupes;
+    inputs.planned.value = f.planned || '';
     for (const k of ['sizeMin', 'sizeMax']) inputs[k].classList.remove('bad');
   }
 
   function refresh() {
     if (!S.sourceId) return;
+    if (sel.all) clearSel();
     renderCats();
     subEl.textContent = describe(S.filter);
     table.reload();
@@ -223,6 +238,48 @@
     refresh();
   }
 
+  // ── Selection and staged actions ──
+  function toggle(r, on) {
+    if (on) sel.ids.set(r.id, r); else sel.ids.delete(r.id);
+    renderSel();
+    table.render();
+  }
+  function clearSel() { sel.ids.clear(); sel.all = false; renderSel(); if (table) table.render(); }
+  const selection = () => (sel.all ? { filter: { ...S.filter } } : { ids: [...sel.ids.keys()] });
+  const selCount = () => (sel.all ? matching : sel.ids.size);
+
+  async function act(op, params = {}) {
+    if (!selCount()) return;
+    await DD.stage(op, selection(), params);
+    clearSel();
+  }
+
+  function renderSel() {
+    if (!selBar) return;
+    const n = selCount();
+    const total = matching;
+    const one = !sel.all && n === 1 ? [...sel.ids.values()][0] : null;
+    const kids = [
+      h('span', { class: 'selcount', text: n ? `${DD.fmtNum(n)} selected` : 'Select rows to stage changes' }),
+      !sel.all && total ? h('button', { class: 'btn ghost small', text: `Select all ${DD.fmtNum(total)} matching`, onclick: () => { sel.all = true; sel.ids.clear(); renderSel(); table.render(); } }) : null,
+      n ? h('button', { class: 'btn ghost small', text: 'Clear', onclick: clearSel }) : null,
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn small', text: 'Exclude', disabled: !n, title: 'Leave out of the export', onclick: () => act('exclude') }),
+      h('button', { class: 'btn small', text: 'Include', disabled: !n, title: 'Undo an exclusion', onclick: () => act('include') }),
+      h('button', { class: 'btn small', text: 'Move to…', disabled: !n, onclick: async () => {
+        const to = await DD.prompt({ title: `Move ${DD.fmtNum(n)} item(s)`, label: 'Folder in the planned structure', placeholder: 'Archive/2024', hint: 'A path relative to the export root. Folders carry everything inside them. Nothing moves until you export.', okText: 'Stage move' });
+        if (to !== null) act('move', { to });
+      } }),
+      h('button', { class: 'btn small', text: 'Rename…', disabled: !one, title: one ? '' : 'Select exactly one item', onclick: async () => {
+        const name = await DD.prompt({ title: 'Rename', label: 'New name', value: one.vpath.split('/').pop(), okText: 'Stage rename' });
+        if (name) act('rename', { name });
+      } }),
+      h('button', { class: 'btn small', text: 'Fix names', disabled: !n, title: 'Clean names for the target file system', onclick: () => act('sanitize', { targetFs: (S.ws && S.ws.targetFs) || 'exfat' }) }),
+    ];
+    selBar.replaceChildren(...kids.filter(Boolean));
+    selBar.classList.toggle('on', n > 0);
+  }
+
   function renderStatus(t) {
     statusEl.replaceChildren(
       h('span', {}, h('b', { text: DD.fmtNum(t.count) }), ' entries'),
@@ -240,7 +297,8 @@
     DD.confirm({
       title: r.name,
       body: [h('table', {}, h('tbody', {},
-        kv('Path', abs), kv('Kind', r.kind), kv('Type', r.category), kv('Size', r.kind === 'dir' ? `${DD.fmtBytes(r.tree_bytes)} in ${DD.fmtNum(r.tree_files)} files` : `${DD.fmtBytes(r.size)} (${DD.fmtNum(r.size)} bytes)`),
+        kv('Path', abs), r.vpath !== r.rel_path || r.vflags ? kv('Planned', r.vflags & DD.VF.EXCLUDED ? 'excluded from export' : r.vpath) : null,
+        r.change_label ? kv('Decided by', r.change_label) : null, kv('Kind', r.kind), kv('Type', r.category), kv('Size', r.kind === 'dir' ? `${DD.fmtBytes(r.tree_bytes)} in ${DD.fmtNum(r.tree_files)} files` : `${DD.fmtBytes(r.size)} (${DD.fmtNum(r.size)} bytes)`),
         kv('Modified', DD.fmtDateTime(r.mtime)), kv('Depth', String(r.depth)), r.link_target ? kv('Links to', r.link_target) : null,
         r.nlink > 1 ? kv('Hard links', String(r.nlink)) : null, kv('SHA-256', r.hash || 'not computed'),
         r.issues ? kv('Issues', r.issues.split(',').map((c) => (S.meta.issues[c] || {}).label || c).join(', ')) : null,

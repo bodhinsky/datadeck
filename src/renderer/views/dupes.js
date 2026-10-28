@@ -26,7 +26,12 @@
     const head = DD.pageHead('Duplicates', 'Byte-identical files: same size, same quick fingerprint, then confirmed with a full SHA-256.', [
       h('button', { class: `btn ${checked ? '' : 'primary'}`, text: checked ? 'Check again' : 'Find duplicates', onclick: () => DD.call('dupes.find', { sourceId: src.id }) }),
       checked && o.dupes.groups ? h('button', { class: 'btn', text: 'List all duplicates', onclick: () => DD.go('explorer', { filter: { dupes: true } }) }) : null,
-      checked && o.dupes.groups ? h('button', { class: 'btn primary', text: 'Export without duplicates…', title: 'Copy everything to a new place, keeping one copy of each duplicate group', onclick: () => DD.go('restructure', { filter: {}, dedupe: true }) }) : null,
+      checked && o.dupes.groups ? h('button', { class: 'btn primary', text: 'Keep one of each…', title: 'Stage a change that excludes the extra copies from the export', onclick: async () => {
+        const v = await DD.confirm({ title: 'Keep one copy of each duplicate', body: [h('p', { text: `Stage a change that leaves ${DD.fmtNum(o.dupes.extra)} extra copies out of the export (${DD.fmtBytes(o.dupes.wasted)}). Nothing is deleted; you review it under Changes.` }), h('p', { class: 'hint', text: 'Which copy stays: the oldest one (ties: the shortest path), or the one with the shortest path.' })], okText: 'Keep oldest', altText: 'Keep shortest path' });
+        if (!v) return;
+        await DD.stage('dedupe', { preset: 'all' }, { keep: v === 'alt' ? 'shortest' : 'oldest' });
+        DD.go('changes', { tab: 'staged' });
+      } }) : null,
     ]);
     if (!checked) {
       el.replaceChildren(head, DD.emptyState('Not checked yet', 'The check only reads files that share a size with another file, and only fully hashes those whose first and last 64 KB also match. Nothing is changed.', null));
@@ -61,7 +66,7 @@
     });
     const wrap = h('div', { style: { height: '60vh', display: 'flex' } }, table.el);
     el.replaceChildren(head, kpis,
-      h('div', { class: 'callout' }, h('span', { class: 'grow', text: 'DataDeck never deletes duplicates on its own. Use “Export without duplicates” to build a clean copy elsewhere, or click a row to show the file in Finder.' })),
+      h('div', { class: 'callout' }, h('span', { class: 'grow', text: 'DataDeck never deletes duplicates on its own. Use “Keep one of each” to stage leaving the extra copies out of an export, or click a row to show the file in Finder.' })),
       wrap);
     table.reload();
   }

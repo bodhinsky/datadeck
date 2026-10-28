@@ -102,6 +102,61 @@ CREATE TABLE IF NOT EXISTS plan_ops (
 );
 CREATE INDEX IF NOT EXISTS ix_ops_plan ON plan_ops(plan_id, seq);
 CREATE INDEX IF NOT EXISTS ix_ops_status ON plan_ops(plan_id, status);
+
+-- Workspace: decisions are recorded as changes against the catalog, grouped
+-- into commits, reviewed, and only then exported. Files are never touched
+-- while staging or committing.
+CREATE TABLE IF NOT EXISTS workspaces (
+  source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+  target_fs TEXT NOT NULL DEFAULT 'apfs',
+  version INTEGER NOT NULL DEFAULT 0,
+  state_hash TEXT,
+  summary TEXT NOT NULL DEFAULT '{}',
+  checked_at INTEGER,
+  checked_version INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS commits (
+  id INTEGER PRIMARY KEY,
+  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  message TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'committed',
+  reviewed_at INTEGER,
+  plan_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS changes (
+  id INTEGER PRIMARY KEY,
+  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  commit_id INTEGER REFERENCES commits(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  op TEXT NOT NULL,
+  params TEXT NOT NULL DEFAULT '{}',
+  label TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  items INTEGER NOT NULL DEFAULT 0,
+  affected INTEGER NOT NULL DEFAULT 0,
+  missing INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_changes_src ON changes(source_id, seq);
+
+-- What a change applies to, by path, so it survives a rescan.
+CREATE TABLE IF NOT EXISTS change_items (
+  change_id INTEGER NOT NULL REFERENCES changes(id) ON DELETE CASCADE,
+  rel_path TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_citems ON change_items(change_id);
+
+-- The computed planned state; only entries that differ or have findings.
+CREATE TABLE IF NOT EXISTS vstate (
+  entry_id INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+  source_id INTEGER NOT NULL,
+  vpath TEXT NOT NULL,
+  flags INTEGER NOT NULL DEFAULT 0,
+  change_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_vstate_src ON vstate(source_id, flags);
 `;
 
 function openDb(file) {

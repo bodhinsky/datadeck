@@ -2,10 +2,11 @@
 
 A local data management cockpit for macOS. Point it at a folder of any depth,
 see what is in it as statistics and sortable tables, find duplicates and names
-that will break on other systems, filter down to exactly the files you mean,
-then copy or move them into a new structure. Every change is planned first,
-verified by SHA-256, journaled, and can be undone. Folder-to-folder or
-folder-to-server sync with rsync is built in.
+that will break on other systems, and decide what the clean result should look
+like. Decisions are staged and committed against a metadata copy of the tree,
+reviewed commit by commit with before/after tables, validated, and only then
+exported. Every written file is verified by SHA-256, journaled and can be
+undone. Folder-to-folder or folder-to-server sync with rsync is built in.
 
 ![Overview](docs/screenshots/1-overview.png)
 
@@ -29,10 +30,12 @@ it and choose **Open**, or run `xattr -cr /Applications/DataDeck.app`.
 | **Sources** | Any folder, any depth. Scanned into a local catalog (metadata only, never file contents). Symlinks are recorded but not followed; unreadable parts are listed instead of stopping the scan. |
 | **Overview** | Files, size, depth, date range, duplicates and issues at a glance, plus tables by type, size class, year, extension, depth, largest folders and largest files. Every row opens the Explorer filtered to it. |
 | **Explorer** | One virtual table for millions of entries. Filter by name pattern, path, extension, type, size, date, depth, issues or duplicates; group by type, extension, year, month, top folder or folder; sort any column; export the result as CSV. |
-| **Duplicates** | Byte-identical files: size, then a quick fingerprint, then a full SHA-256. Shows reclaimable space per group. Never deletes anything; offers an export that keeps one copy each. |
+| **Duplicates** | Byte-identical files: size, then a quick fingerprint, then a full SHA-256. Shows reclaimable space per group. Never deletes anything; “Keep one of each” stages leaving the extra copies out. |
 | **Issues** | Case and Unicode collisions, names invalid on Windows/exFAT/FAT32, trailing dots, too-long names and paths, >4 GB files for FAT32, odd dates, empty files and folders, clutter, broken links, unreadable entries. |
-| **Restructure** | Take the current selection, choose a target and a layout (presets or a template such as `{category}/{yyyy}/{mm}/{name}`), see a live preview, build a plan, review every single operation, run it, undo it. Names are cleaned for the target file system. |
-| **Plans & undo** | Every plan with its per-file journal: what went where, both checksums, the result. Resume interrupted plans, export the journal, undo finished ones. |
+| **Explorer actions** | Select rows (or everything matching the filter) and stage Exclude, Include, Move to…, Rename… or Fix names. Every row shows its planned path and a marker: moved, renamed, excluded, collides, bad name, changed on disk. |
+| **Layout** | Stage a folder structure for a selection from presets or a template such as `{category}/{yyyy}/{mm}/{name}`, with a live preview. |
+| **Changes** | The review-first pipeline: staged changes, commits, a before/after diff per commit with an explicit “I checked these changes”, a statistics view of the planned folders, and *Validate & export*: a checklist (all committed, all reviewed, no collisions, sources re-checked against the disk, nothing changed since the scan) plus a final acknowledgement before an export plan can be built. |
+| **Exports & undo** | Every export with its per-file journal: what went where, both checksums, the result. Resume interrupted exports, save the journal as CSV, undo finished ones. |
 | **Sync** | Saved rsync profiles: preview, mirror or copy, automatic reconnects after network drops, checksum verification afterwards, live log and history. |
 | **Jobs / Settings** | Background work with progress and cancel; rsync path, notifications, keep-awake, light/dark/auto theme. |
 
@@ -40,15 +43,26 @@ Shortcuts: `⌘O` add source, `⌘N` new sync profile, `⌘⇧P` sync preview, `
 
 | | |
 |---|---|
-| ![Explorer](docs/screenshots/2-explorer.png) | ![Duplicates](docs/screenshots/3-duplicates.png) |
-| ![Restructure](docs/screenshots/5-restructure.png) | ![Plan](docs/screenshots/6-plan-done.png) |
-| ![Sync](docs/screenshots/7-sync-preview.png) | ![Dark](docs/screenshots/9-dark.png) |
+| ![Explorer with staged changes](docs/screenshots/2-explorer.png) | ![Staged changes](docs/screenshots/6-staged.png) |
+| ![Reviewing a commit](docs/screenshots/7-review.png) | ![Export gate](docs/screenshots/8-export-gate.png) |
+| ![Collisions](docs/screenshots/8b-collisions.png) | ![Export done](docs/screenshots/9-export-done.png) |
+| ![Duplicates](docs/screenshots/3-duplicates.png) | ![Sync](docs/screenshots/10-sync-preview.png) |
 
 ## Data integrity and safety
 
-**Restructuring**
+**Review-first changes**
 
-* Nothing is touched until you run a plan you have reviewed.
+* Staging and committing only change metadata. Files are written by one path
+  only: an export built from reviewed commits after the validation checklist
+  passes, which the engine enforces itself (the window cannot bypass it).
+* The export plan remembers the exact planned state it was built from and is
+  refused if anything changed after the review.
+* Sources are re-checked against the disk before export; files that changed
+  since the scan block the export until you rescan or exclude them.
+
+**Writing files**
+
+* Nothing is touched until you run an export plan you have inspected.
 * Each file is written under a temporary name, fsynced, **read back and
   compared by SHA-256**, and published with an operation that fails rather than
   replace an existing file. Existing files are never overwritten.
@@ -86,13 +100,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and roadmap.
 ## Tests
 
 ```bash
-npm test             # unit + engine + integration (103 tests; rsync needed for integration)
+npm test             # unit + engine + integration (114 tests; rsync needed for integration)
 npm run test:e2e     # drives the real app with Playwright (Linux: xvfb-run -a npm run test:e2e)
 npm run screenshots  # regenerates docs/screenshots
 ```
 
 * **Unit** (54): rsync arguments, parsers, safety rules, retry state machine.
-* **Engine** (32): scanning odd trees (300 levels deep, Unicode, symlink loops,
+* **Engine** (43): the review-first workspace (staging never touches files, folder moves carry content, collisions per file system, the export gate, re-check, stale plans refused, in-place apply, rescan survival); scanning odd trees (300 levels deep, Unicode, symlink loops,
   unreadable folders, 20k files), issue rules, duplicates, CSV export, and every
   restructure guarantee with injected corruption, simulated crashes, changed
   sources, cross-device moves and undo.
@@ -100,7 +114,8 @@ npm run screenshots  # regenerates docs/screenshots
   corruption detection, and network drills with a proxy that cuts, freezes and
   flaps the link.
 * **End-to-end** (5): the real app, from adding a source through analysis,
-  filtering, planning, a verified copy and undo; plus preview/mirror/verify,
+  staging (dedupe, exclude, rename, layout), commit, review, re-check, a
+  verified export and undo; plus preview/mirror/verify,
   stop and resume, the empty-source guard and a network drop.
 
 A GitHub Actions workflow runs all of it on macOS and Linux.
@@ -116,7 +131,8 @@ src/engine/             catalog + analysis + restructure (runs in a worker threa
   analysis.js query.js  statistics, filters, grouping
   compat.js             file-system rules and name sanitising
   dupes.js hash.js      duplicate detection
-  template.js planner.js executor.js   plans, verified execution, recovery, undo
+  changes.js            staged changes, commits, planned state, export gate
+  template.js planner.js executor.js   export plans, verified execution, recovery, undo
   engine.js worker.js client.js        job control and the worker bridge
 src/core/               rsync: arguments, safety, runner, parsers
 src/renderer/           the UI (plain HTML/CSS/JS, bundled fonts)

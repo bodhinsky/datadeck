@@ -12,6 +12,7 @@
     <div class="brand"><span class="brand-mark"></span><span class="brand-name">DATADECK</span></div>
     <div class="crumbs"><b id="crumbPage">Overview</b><span id="crumbSource"></span><span class="path" id="crumbPath"></span></div>
     <div class="spacer"></div>
+    <button class="wspill" id="wsPill" hidden title="Pending decisions. Nothing is written to disk until you export a reviewed state."></button>
     <div class="jobbar" id="jobbar" hidden>
       <div class="jl"><div class="jt" id="jobTitle"></div><div class="js" id="jobSub"></div><div class="progress" id="jobProg"><i></i></div></div>
       <button class="btn sm" id="jobCancel">Cancel</button>
@@ -36,8 +37,9 @@
     <div>
       <div class="nav-h">Organize<span class="rule"></span></div>
       <nav class="nav">
-        <a data-page="restructure"><span class="ico">⇄</span>Restructure</a>
-        <a data-page="plans"><span class="ico">≡</span>Plans &amp; undo</a>
+        <a data-page="restructure"><span class="ico">⇄</span>Layout</a>
+        <a data-page="changes"><span class="ico">±</span>Changes<span class="count" id="navChanges"></span></a>
+        <a data-page="plans"><span class="ico">≡</span>Exports &amp; undo</a>
       </nav>
     </div>
     <div>
@@ -62,6 +64,7 @@
     <section class="page" id="page-dupes"></section>
     <section class="page fill" id="page-issues"></section>
     <section class="page" id="page-restructure"></section>
+    <section class="page" id="page-changes"></section>
     <section class="page" id="page-plans"></section>
     <section class="page" id="page-sync"></section>
     <section class="page" id="page-jobs"></section>
@@ -75,6 +78,7 @@
 <script src="views/dupes.js"></script>
 <script src="views/issues.js"></script>
 <script src="views/restructure.js"></script>
+<script src="views/changes.js"></script>
 <script src="views/plans.js"></script>
 <script src="views/sync.js"></script>
 <script src="views/system.js"></script>

@@ -144,5 +144,50 @@
     DD.h('div', {}, DD.h('h1', { text: title }), sub ? DD.h('div', { class: 'sub', text: sub }) : null),
     DD.h('div', { class: 'actions' }, actions));
 
+  // A one-field dialog. Resolves to the trimmed text, or null.
+  DD.prompt = async ({ title, label, value = '', placeholder = '', hint, okText = 'OK', mono = true, extra }) => {
+    const { h } = DD;
+    const input = h('input', { class: `input${mono ? ' mono' : ''}`, value, placeholder, spellcheck: 'false' });
+    const p = DD.confirm({ title, okText, body: [h('label', { class: 'field' }, h('span', { text: label }), input), hint ? h('p', { class: 'hint', text: hint }) : null, extra || null] });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.querySelector('.modal-f .btn:last-child').click(); });
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+    const ok = await p;
+    return ok === true ? input.value.trim() : null;
+  };
+
+  // ── Planned state (workspace) ──
+  DD.VF = { MOVED: 1, RENAMED: 2, EXCLUDED: 4, CONFLICT: 8, BADNAME: 16, CLASH: 32, STALE: 64 };
+  // Visual markers for a row's planned state.
+  DD.stateChips = (f) => {
+    const { h } = DD;
+    const V = DD.VF;
+    const out = [];
+    if (f & V.EXCLUDED) out.push(h('span', { class: 'tag st-x', text: 'excluded', title: 'Will not be exported' }));
+    else {
+      if (f & V.MOVED) out.push(h('span', { class: 'tag st-m', text: 'moved', title: 'Goes to another folder' }));
+      if (f & V.RENAMED) out.push(h('span', { class: 'tag st-r', text: 'renamed', title: 'Gets a new name' }));
+    }
+    if (f & (V.CONFLICT | V.CLASH)) out.push(h('span', { class: 'tag bad', text: 'collides', title: 'Another file lands on the same path' }));
+    if (f & V.BADNAME) out.push(h('span', { class: 'tag warn', text: 'name', title: 'Not valid on the target file system; will be cleaned on export' }));
+    if (f & V.STALE) out.push(h('span', { class: 'tag bad', text: 'changed on disk', title: 'The file changed or vanished since the scan' }));
+    return h('span', { class: 'chips-inline' }, out);
+  };
+  DD.stateClass = (f) => {
+    const V = DD.VF;
+    if (f & (V.CONFLICT | V.CLASH | V.STALE)) return 'st-bad';
+    if (f & V.EXCLUDED) return 'st-excl';
+    if (f & (V.MOVED | V.RENAMED)) return 'st-chg';
+    return '';
+  };
+
+  // Records a decision as a staged change. Nothing on disk is touched.
+  DD.stage = async (op, selection, params = {}) => {
+    const r = await DD.call('ws.stage', { sourceId: DD.state.sourceId, op, selection, params });
+    DD.toast(`Staged: ${r.change.label}. Review it under Changes.`);
+    DD.setWs(r.summary);
+    DD.bus.dispatchEvent(new CustomEvent('ws'));
+    return r;
+  };
+
   DD.emptyState = (title, text, action) => DD.h('div', { class: 'empty-state' }, DD.h('h2', { text: title }), DD.h('p', { text: text }), action || null);
 })();

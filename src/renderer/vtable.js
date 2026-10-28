@@ -7,11 +7,12 @@
   const { h } = DD;
 
   class VirtualTable {
-    constructor({ columns, fetch, onRowClick, rowHeight = 30, pageSize = 200, emptyText = 'Nothing to show.', sort = null, dir = 'asc', round = false, onLoaded }) {
+    constructor({ columns, fetch, onRowClick, rowClass, rowHeight = 30, pageSize = 200, emptyText = 'Nothing to show.', sort = null, dir = 'asc', round = false, onLoaded }) {
       this.columns = columns;
       this.fetchPage = fetch;
       this.onRowClick = onRowClick;
       this.onLoaded = onLoaded;
+      this.rowClass = rowClass;
       this.rowHeight = rowHeight;
       this.pageSize = pageSize;
       this.emptyText = emptyText;
@@ -103,7 +104,7 @@
       const rows = [];
       for (let i = first; i < last; i++) {
         const r = this.rowAt(i);
-        const el = h('div', { class: `vt-r${i % 2 ? ' alt' : ''}${r ? '' : ' loading'}`, style: { top: `${i * rh}px`, gridTemplateColumns: this.tpl, height: `${rh}px` } },
+        const el = h('div', { class: `vt-r${i % 2 ? ' alt' : ''}${r ? '' : ' loading'}${r && this.rowClass ? ` ${this.rowClass(r) || ''}` : ''}`, style: { top: `${i * rh}px`, gridTemplateColumns: this.tpl, height: `${rh}px` } },
           this.columns.map((c) => {
             if (!r) return h('span', { text: '·' });
             const v = c.render ? c.render(r, i) : r[c.key];
@@ -112,7 +113,7 @@
             if (c.titleOf && r) cell.title = c.titleOf(r);
             return cell;
           }));
-        if (r && this.onRowClick) { el.style.cursor = 'pointer'; el.addEventListener('click', () => this.onRowClick(r, i)); }
+        if (r && this.onRowClick) { el.style.cursor = 'pointer'; el.addEventListener('click', (ev) => { if (!ev.target.closest('input, button, label')) this.onRowClick(r, i); }); }
         rows.push(el);
       }
       this.body.replaceChildren(this.spacer, this.empty, ...rows);

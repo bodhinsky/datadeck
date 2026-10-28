@@ -14,10 +14,10 @@
     async show() {
       if (!DD.source()) { DD.go('overview'); return; }
       const plans = await DD.call('plan.list', { sourceId: S.sourceId });
-      const head = DD.pageHead('Plans & undo', 'Every plan is kept with its full per-file journal: what moved where, both checksums, and the result. Open one to resume, export or undo it.', [
-        h('button', { class: 'btn primary', text: 'New plan', onclick: () => DD.go('restructure', { filter: {} }) }),
+      const head = DD.pageHead('Exports & undo', 'Every export is kept with its full per-file journal: what went where, both checksums, and the result. Open one to resume, save the journal as CSV, or undo it.', [
+        h('button', { class: 'btn primary', text: 'Go to Changes', onclick: () => DD.go('changes', { tab: 'export' }) }),
       ]);
-      if (!plans.length) { el.replaceChildren(head, DD.emptyState('No plans yet', 'Build one from the Restructure page.')); return; }
+      if (!plans.length) { el.replaceChildren(head, DD.emptyState('No exports yet', 'Stage, commit and review changes, then export them from the Changes page.')); return; }
       const tone = (st) => (st === 'done' ? 'ok' : st === 'draft' ? 'info' : /error|invalid|interrupted|failed/.test(st) ? 'bad' : 'warn');
       el.replaceChildren(head, DD.card('Plans', h('table', { class: 'stat' },
         h('thead', {}, h('tr', {}, ['#', 'Created', 'Mode', 'Target', 'Files', 'Size', 'Status', 'Finished'].map((t, i) => h('th', { class: i >= 4 && i <= 5 ? 'r' : '', text: t })))),

@@ -4,7 +4,7 @@
 (function () {
   const { h, $, $$ } = DD;
   const S = DD.state;
-  const PAGE_TITLES = { overview: 'Overview', explorer: 'Explorer', dupes: 'Duplicates', issues: 'Issues', restructure: 'Restructure', plans: 'Plans & undo', sync: 'Sync', jobs: 'Jobs', settings: 'Settings' };
+  const PAGE_TITLES = { overview: 'Overview', explorer: 'Explorer', dupes: 'Duplicates', issues: 'Issues', restructure: 'Layout', changes: 'Changes', plans: 'Exports & undo', sync: 'Sync', jobs: 'Jobs', settings: 'Settings' };
 
   DD.source = () => S.sources.find((s) => s.id === S.sourceId) || null;
 
@@ -24,8 +24,31 @@
     if (!S.sources.length) list.append(h('div', { class: 'hint', style: { padding: '2px 8px' }, text: 'Add a folder to start.' }));
   }
 
+  // Pending-decision indicators: sidebar badge and the top bar pill.
+  DD.setWs = (w) => {
+    S.ws = w || null;
+    const pill = $('wsPill');
+    const nav = $('navChanges');
+    if (!w || !DD.source()) { pill.hidden = true; nav.textContent = ''; return; }
+    const problems = (w.conflicts || 0) + (w.clashes || 0) + (w.stale || 0);
+    const parts = [];
+    if (w.staged) parts.push(`${w.staged} staged`);
+    if (w.unreviewed) parts.push(`${w.unreviewed} to review`);
+    if (problems) parts.push(`${problems} problem${problems === 1 ? '' : 's'}`);
+    if (!parts.length && w.commits) parts.push(`${w.commits} reviewed commit${w.commits === 1 ? '' : 's'}`);
+    pill.hidden = !parts.length;
+    pill.textContent = parts.join(' · ');
+    pill.className = `wspill${problems ? ' bad' : w.staged || w.unreviewed ? ' warn' : ' ok'}`;
+    nav.textContent = w.staged + w.unreviewed ? String(w.staged + w.unreviewed) : '';
+  };
+  DD.refreshWs = async () => {
+    if (!S.sourceId) { DD.setWs(null); return; }
+    DD.setWs(await DD.call('ws.summary', { sourceId: S.sourceId }, { quiet: true }).catch(() => null));
+  };
+
   DD.selectSource = (id) => {
     S.sourceId = id;
+    DD.refreshWs();
     renderSources();
     renderCrumbs();
     DD.bus.dispatchEvent(new CustomEvent('source'));
@@ -83,6 +106,7 @@
       if (job.kind === 'scan') sub = `${DD.fmtNum(p.files || 0)} files · ${DD.fmtNum(p.dirs || 0)} folders · ${DD.fmtBytes(p.bytes || 0)}${p.current ? ` · ${p.current}` : ''}`;
       else if (job.kind === 'dupes') { sub = `${p.phase === 'full' ? 'Comparing contents' : 'Pre-checking'} · ${DD.fmtBytes(p.bytesHashed || 0)} read`; frac = p.phase === 'full' && p.fullCandidates ? p.hashed / p.fullCandidates : p.candidates ? (p.quick || 0) / p.candidates * 0.3 : null; }
       else if (job.kind === 'execute') { sub = `${DD.fmtNum((p.done || 0) + (p.skipped || 0))} / ${DD.fmtNum(p.total || 0)} files · ${DD.fmtBytes(p.bytesDone || 0)} of ${DD.fmtBytes(p.bytesTotal || 0)}${p.failed ? ` · ${p.failed} failed` : ''}`; frac = p.bytesTotal ? p.bytesDone / p.bytesTotal : p.total ? (p.done + p.skipped) / p.total : null; }
+      else if (job.kind === 'verify') { sub = `${DD.fmtNum(p.checked || 0)} / ${DD.fmtNum(p.total || 0)} files compared with the disk`; frac = p.total ? p.checked / p.total : null; }
       else if (job.kind === 'undo') { sub = `${p.undone || 0} / ${p.total || 0}`; frac = p.total ? (p.undone + p.kept + p.failed) / p.total : null; }
       $('jobSub').textContent = sub;
       const prog = $('jobProg');
@@ -93,7 +117,7 @@
       if (job.status === 'failed') DD.toast(`${job.label}: ${job.error}`, true);
       else if (job.status === 'cancelled') DD.toast(`${job.label}: cancelled`);
       else DD.toast(`${job.label}: done`);
-      DD.refreshSources().then(() => DD.bus.dispatchEvent(new CustomEvent('job-done', { detail: job })));
+      DD.refreshSources().then(() => { DD.refreshWs(); DD.bus.dispatchEvent(new CustomEvent('job-done', { detail: job })); });
     }
     DD.bus.dispatchEvent(new CustomEvent('job', { detail: job }));
   }
@@ -123,6 +147,7 @@
     $$('#themeSeg button').forEach((b) => b.addEventListener('click', () => DD.saveSettings({ theme: b.dataset.themeSet })));
     $$('.nav a[data-page]').forEach((a) => a.addEventListener('click', () => DD.go(a.dataset.page)));
     $('btnAddSource').addEventListener('click', DD.addSource);
+    $('wsPill').addEventListener('click', () => DD.go('changes'));
     deck.onMenu((cmd) => { if (cmd === 'add-source') DD.addSource(); });
     $('jobCancel').addEventListener('click', () => { if (S.activeJob) DD.call('job.cancel', { jobId: S.activeJob.id }); });
     deck.onEngineEvent((event, data) => {
@@ -132,6 +157,7 @@
     $('sideFoot').textContent = d.rsync && d.rsync.ok ? `rsync ${d.rsync.version || ''} · catalog ready` : 'catalog ready · rsync not found';
     for (const v of Object.values(DD.views)) if (v.init) v.init();
     await DD.refreshSources();
+    await DD.refreshWs();
     DD.go(S.sources.length ? 'overview' : 'overview');
   }
 

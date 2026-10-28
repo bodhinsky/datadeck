@@ -8,14 +8,47 @@ safely to any destination.
 The pipeline every feature fits into:
 
 ```
- source  ──▶  scan  ──▶  analyze  ──▶  filter / select  ──▶  plan  ──▶  execute  ──▶  verify  ──▶  journal / undo
- (folder,      (catalog    (types, sizes,   (Explorer: any       (dry,      (copy/move   (SHA-256      (per-file
-  later: S3,    in SQLite)  dates, dupes,    combination of       reviewable, or rsync)    read-back)    record)
-  SFTP, ...)                issues)          filters, groups)     per file)
+ source ─▶ scan ─▶ analyze ─▶ decide ──────────────▶ commit ─▶ review ─▶ validate ─▶ export ─▶ verify ─▶ journal / undo
+ (folder)  (catalog) (stats,   (stage changes on a     (group,   (per-commit (collisions,  (plan from  (SHA-256  (per-file
+                     dupes,     metadata copy of the     message)  before/after, re-check     the planned read-back) record)
+                     issues)    tree: exclude, move,               explicit ack) against disk, state only)
+                                rename, layout, fix                              final ack)
+                                names, keep one copy)
 ```
 
-Nothing touches user files before the "execute" step, and execute only ever
-does what a reviewed plan lists.
+Everything left of "export" works on metadata only. Files are written by
+exactly one path: an export plan built from a reviewed, validated planned
+state, which the user inspects operation by operation and then runs.
+
+## The workspace (review-first changes)
+
+`src/engine/changes.js`. Each source has a workspace:
+
+* **Changes** are decisions: `exclude`, `include`, `move` (to a folder),
+  `rename`, `layout` (a path template), `sanitize` (fix names for a target file
+  system) and `dedupe` (keep one copy by rule). A change stores what it applies
+  to as relative paths (`change_items`), so it survives a rescan; paths that no
+  longer exist are counted as missing, never guessed.
+* **Staged** changes are uncommitted. **Commits** group them with a message.
+  A commit is `committed` until the user reviews its before/after table and
+  acknowledges it (`reviewed`). After a copy export it is `exported`; after an
+  in-place move it is `applied` and stops shaping the planned state, because
+  the next scan already shows it.
+* **The planned state** (`vstate`) is recomputed from the catalog plus every
+  active change, in order. Folders carry their content; a folder and its files
+  selected together move once. Each entry gets flags: moved, renamed, excluded,
+  collides (same target path, case-insensitive where the target is), clash (a
+  file where a folder must be), bad name (invalid on the target file system),
+  changed on disk. The table views page, sort and filter it like the catalog.
+* **A version** identifies the planned state (a hash of all paths and flags).
+  It only moves when the state really changes.
+* **Validation before export**, enforced in the engine, not only in the UI:
+  nothing staged, every commit reviewed, no collisions, the sources re-checked
+  against the disk *for this exact version*, no file changed since the scan,
+  and an explicit final acknowledgement. The export plan records the version
+  it was built from; running it is refused if the state changed afterwards.
+* The renderer cannot build a plan any other way: `plan.create` is not part of
+  the IPC whitelist.
 
 ## Processes
 
@@ -57,6 +90,10 @@ keys on. It stores metadata and checksums only, never file contents.
 | `issues` | portability and hygiene findings per entry |
 | `plans` | a restructure plan: spec, summary, status, timestamps |
 | `plan_ops` | the per-file journal: source, target, size and mtime at plan time, status, both checksums, note, error, time done |
+| `workspaces` | per source: target file system, planned-state version and hash, last re-check |
+| `changes`, `change_items` | staged or committed decisions and the paths they apply to |
+| `commits` | message, status (committed, reviewed, exported, applied), export plan |
+| `vstate` | the computed planned path and flags of every entry that differs |
 
 Indexes cover every filter and group in the Explorer, so a 1M-row catalog is
 paged and grouped in milliseconds; the UI only ever fetches the visible page.
@@ -85,7 +122,7 @@ paged and grouped in milliseconds; the UI only ever fetches the visible page.
 * **Duplicates:** three passes, so only real candidates are read in full: same
   size, then a quick hash of the first and last 64 KB, then a full SHA-256.
 
-## Restructuring (`template.js`, `planner.js`, `executor.js`)
+## Export execution (`template.js`, `planner.js`, `executor.js`)
 
 **Templates** build each target path from tokens: `{path} {parent} {top}
 {name} {stem} {ext} {extdir} {category} {yyyy} {mm} {dd} {date} {sizeclass}
@@ -93,7 +130,7 @@ paged and grouped in milliseconds; the UI only ever fetches the visible page.
 system (APFS, ext4, NTFS, exFAT, FAT32) deterministically, and a joined path can
 never escape the target root.
 
-**Planning** is a dry run that writes only to the catalog:
+**Planning** an export is a dry run that writes only to the catalog:
 
 * clashes inside the plan get " (2)", " (3)" … or are skipped, by choice;
 * existing files at the target are never overwritten; same-size ones are
@@ -132,9 +169,9 @@ codes, and a checksum verify pass after every run.
 | suite | what it proves |
 |---|---|
 | `test/unit` (54) | rsync arguments, parsers, safety rules, retry state machine |
-| `test/engine` (32) | scan edge cases (unicode, links, loops, unreadable, 20k files), issue rules, duplicates, every restructure guarantee above including injected corruption, simulated crash and recovery, changed sources, cross-device moves and undo |
+| `test/engine` (43) | scan edge cases (unicode, links, loops, unreadable, 20k files), issue rules, duplicates, every restructure guarantee above including injected corruption, simulated crash and recovery, changed sources, cross-device moves and undo; and the workspace: staging never touches files, folder carry, collisions per file system, the export gate, re-check, stale plans refused, in-place apply, rescan survival, dedupe rules |
 | `test/integration` (17) | real rsync: hostile names, mirror/delete limits, corruption detection, network cuts and flapping links |
-| `test/e2e` (5) | the real app: add source → analyze → filter → plan → verified copy → undo, plus four sync scenarios |
+| `test/e2e` (5) | the real app: add source → analyze → stage (dedupe, exclude, rename, layout) → commit → review → re-check → export → undo, plus four sync scenarios |
 
 All of it also passes as an unprivileged user, where permission errors are real.
 
@@ -153,5 +190,6 @@ Next increments, in the order they add the most value:
    source interface so scan/analyze/plan work unchanged.
 5. **Export formats:** CSV exists; add Excel, JSON manifests with checksums,
    and verifiable bag/manifest files for long-term archives.
-6. **Rules:** reusable restructure recipes ("Camera uploads → Photos/yyyy/mm,
+6. **Change review extras:** per-row approve/reject inside a commit, side-by-side tree view of before/after, and comments on commits.
+7. **Rules:** reusable restructure recipes ("Camera uploads → Photos/yyyy/mm,
    skip duplicates") that can run on a schedule, always through a reviewed plan.
