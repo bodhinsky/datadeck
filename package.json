@@ -17,7 +17,7 @@
   "author": "Tim",
   "license": "Apache-2.0",
   "devDependencies": {
-    "electron": "^38.8.6",
+    "electron": "^44.10.0",
     "electron-builder": "^26.18.0",
     "playwright": "^1.63.0"
   },
