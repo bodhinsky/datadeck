@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { makeEngine } = require('../helpers/engine');
-const { write, randomBytes } = require('../helpers/fsutil');
+const { write, randomBytes, fsTraits } = require('../helpers/fsutil');
+
+const FS = fsTraits();
 
 const asRoot = process.getuid && process.getuid() === 0;
 
@@ -100,11 +102,16 @@ test('flags case and unicode collisions, bad names, junk and empties', async () 
   });
   try {
     const codes = (name) => (s.q({ name }).rows[0].issues || '').split(',');
-    assert.ok(codes('Photo.JPG').includes('case-collision'));
-    assert.ok(codes('photo.jpg').includes('case-collision'));
-    assert.ok(codes('Café.txt').includes('unicode-collision'));
-    assert.ok(codes('Café.txt').includes('not-nfc'));
-    assert.ok(!codes('Café.txt').includes('case-collision'), 'NFC/NFD pair is not a case collision');
+    // Only file systems that keep both names can hold a collision (not APFS).
+    if (FS.caseSensitive) {
+      assert.ok(codes('Photo.JPG').includes('case-collision'));
+      assert.ok(codes('photo.jpg').includes('case-collision'));
+    }
+    if (FS.normSensitive) {
+      assert.ok(codes('Café.txt').includes('unicode-collision'));
+      assert.ok(codes('Café.txt').includes('not-nfc'));
+      assert.ok(!codes('Café.txt').includes('case-collision'), 'NFC/NFD pair is not a case collision');
+    }
     assert.ok(codes('what?.txt').includes('bad-char'));
     assert.ok(codes('aux.c').includes('reserved-name'));
     assert.ok(codes('.DS_Store').includes('junk'));

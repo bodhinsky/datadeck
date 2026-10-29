@@ -42,8 +42,21 @@ function randomBytes(n, seed = 1) {
   return b;
 }
 
+// What the temp folder's file system can store. macOS (APFS/HFS+) ignores
+// case and Unicode normalization by default, so "Photo.JPG" and "photo.jpg"
+// are one file there; tests that need both are skipped on such systems.
+function fsTraits(dir = os.tmpdir()) {
+  if (process.env.DD_TEST_FOLD_FS) return { caseSensitive: false, normSensitive: false }; // simulate macOS
+  const d = fs.mkdtempSync(path.join(dir, 'fs-probe-'));
+  try {
+    fs.writeFileSync(path.join(d, 'a'), '');
+    fs.writeFileSync(path.join(d, 'Caf\u00e9'), '');
+    return { caseSensitive: !fs.existsSync(path.join(d, 'A')), normSensitive: !fs.existsSync(path.join(d, 'Cafe\u0301')) };
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+
 function hasRsync() {
   try { execFileSync('rsync', ['--version']); return true; } catch { return false; }
 }
 
-module.exports = { tmpdir, snapshot, write, randomBytes, hasRsync };
+module.exports = { tmpdir, snapshot, write, randomBytes, hasRsync, fsTraits };

@@ -5,7 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { makeEngine } = require('../helpers/engine');
-const { write, randomBytes, snapshot } = require('../helpers/fsutil');
+const { write, randomBytes, snapshot, fsTraits } = require('../helpers/fsutil');
+
+// On APFS (case-insensitive) Report.PDF would overwrite report.pdf.
+const CASE_SENSITIVE = fsTraits().caseSensitive;
 const { F } = require('../../src/engine/changes');
 const { API } = require('../../src/engine/engine');
 
@@ -14,7 +17,7 @@ const FILES = {
   'Trips/Rome/notes.txt': 'rome',
   'Trips/Oslo/IMG_1.jpg': randomBytes(90000, 2),
   'Work/report.pdf': randomBytes(40000, 3),
-  'Work/Report.PDF': randomBytes(41000, 5),
+  ...(CASE_SENSITIVE ? { 'Work/Report.PDF': randomBytes(41000, 5) } : {}),
   'Inbox/report copy.pdf': randomBytes(40000, 3),
   'Misc/song.mp3': randomBytes(60000, 4),
   'Misc/.DS_Store': 'junk',
@@ -84,7 +87,7 @@ test('folders carry their content; selecting a folder and its files moves them o
   assert.equal(c.planned()['Trips/Oslo/IMG_1.jpg'].flags & F.EXCLUDED, F.EXCLUDED);
 });
 
-test('collisions are found per target file system, and block the export', async (t) => {
+test('collisions are found per target file system, and block the export', { skip: !CASE_SENSITIVE && 'needs a case-sensitive file system (Linux CI covers it)' }, async (t) => {
   const c = await setup();
   t.after(c.cleanup);
   // report.pdf and Report.PDF already differ only by case.
@@ -155,7 +158,7 @@ test('export writes exactly the reviewed state, verified; the source is untouche
   t.after(c.cleanup);
   c.e.wsTarget({ sourceId: c.sid, targetFs: 'exfat' });
   c.stage('exclude', { preset: 'junk' });
-  c.stage('exclude', c.paths('Work/Report.PDF'));
+  if (CASE_SENSITIVE) c.stage('exclude', c.paths('Work/Report.PDF'));
   c.stage('layout', { filter: { categories: ['image'] } }, { template: 'Photos/{parent}/{name}' });
   c.stage('sanitize', c.paths('Misc/Bad:name?.txt'), { targetFs: 'exfat' });
   const id = c.commitAll('sort photos');
